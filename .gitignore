@@ -1,0 +1,29 @@
+# Ignore dataset files
+Datasets/Comment_Generation/*.jsonl
+Datasets/Code_Refinement/*.jsonl
+Datasets/Diff_Quality_Estimation/*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual Environment
+venv/
+env/
+.env/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
