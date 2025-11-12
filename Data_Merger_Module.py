@@ -6,7 +6,7 @@ NUM_ROWS = 100000  # optional limit for testing
 CHUNK_SIZE = 5000  # number of rows to process at a time (tune for memory)
 CODE_REF_TRAIN_PATH = "data/Code_Refinement/ref-train.jsonl"
 COMMENT_GEN_TRAIN_PATH = "data/Comment_Generation/msg-train.jsonl"
-COMBINED_OUTPUT_PATH = "data/testing_combined_dataset.jsonl"
+COMBINED_OUTPUT_PATH = "data/combined_dataset.jsonl"
 
 def infer_language_from_code(code: str) -> str | None:
     if not isinstance(code, str) or not code.strip():
@@ -62,10 +62,6 @@ def stream_and_merge_jsonl(ref_path, gen_path, output_path, chunksize=1000, max_
         chunk = chunk[['original_file', 'language', 'original_patch',
                        'refined_patch', 'review_comment', 'quality_label', 'source_dataset']]
 
-        # Language inference
-        mask = chunk['language'].isna()
-        chunk.loc[mask, 'language'] = chunk.loc[mask, 'original_file'].apply(infer_language_from_code)
-
         # Write to JSONL
         chunk.to_json(output_path, orient='records', lines=True, force_ascii=False,
                       mode='a', index=False)
@@ -111,5 +107,5 @@ if __name__ == "__main__":
         COMMENT_GEN_TRAIN_PATH,
         COMBINED_OUTPUT_PATH,
         CHUNK_SIZE,  # tune for memory
-        max_rows=NUM_ROWS
+        # max_rows=NUM_ROWS
     )
