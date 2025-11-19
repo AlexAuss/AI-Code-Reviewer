@@ -1,6 +1,45 @@
 # AI-Code-Reviewer
 Author: Dylan L, Alex Aussawlaithong, Dayamoy Datta Saikat
+
 Code Reviews are an important part of Software Development. This essential process of reviewing code from peers can be very time consuming, which drastically affects the productivity of the Software development group. By creating a tool that can generate a summary of written code, we can cut down on the overhead involved in reviewing code.
+
+## Project Status
+
+✅ **Phase 1**: Dataset exploration and architecture design  
+✅ **Phase 2**: Indexing implementation (Dense FAISS + Sparse BM25 + Hybrid Retrieval)  
+🔄 **Phase 3**: Query Processing (In Progress)  
+⏳ **Phase 4**: Prompt Construction  
+⏳ **Phase 5**: LLM Generation  
+
+## Quick Start
+
+### Setup
+```bash
+# Clone and navigate to repository
+cd AI-Code-Reviewer
+
+# Run setup script (creates venv, installs dependencies)
+chmod +x setup_indexing.sh
+./setup_indexing.sh
+
+# Or manually:
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Test Indexing (Phase 2)
+```bash
+# Run demo (creates sample data + builds indexes + tests retrieval)
+python3 src/indexing/demo_indexing.py
+
+# Or build indexes from your unified dataset
+python3 src/indexing/build_indexes.py \
+  --dataset Datasets/Unified_Dataset/train.jsonl \
+  --output data/indexes
+```
+
+See `INDEXING_IMPLEMENTATION.md` for detailed Phase 2 documentation.
 
 ```mermaid
 flowchart TD
