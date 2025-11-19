@@ -1,6 +1,7 @@
 import pandas as pd
 import re
 import os
+from typing import Optional
 
 NUM_ROWS = 100000  # optional limit for testing
 CHUNK_SIZE = 5000  # number of rows to process at a time (tune for memory)
@@ -8,7 +9,7 @@ CODE_REF_TRAIN_PATH = "Datasets/Code_Refinement/ref-train.jsonl"
 COMMENT_GEN_TRAIN_PATH = "Datasets/Comment_Generation/msg-train.jsonl"
 COMBINED_OUTPUT_PATH = "Datasets/Unified_Dataset/train.jsonl"
 
-def infer_language_from_code(code: str) -> str | None:
+def infer_language_from_code(code: str) -> Optional[str]:
     if not isinstance(code, str) or not code.strip():
         return None
 
