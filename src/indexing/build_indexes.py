@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class IndexConfig:
     """Configuration for index building."""
-    dataset_path: str = "Datasets/Unified_Dataset/train_100.jsonl"
+    dataset_path: str = "Datasets/Unified_Dataset/train.jsonl"
     index_output_dir: str = "data/indexes"
     
     # Dense index settings
@@ -487,7 +487,7 @@ def build_all_indexes(config: IndexConfig, use_codebert_tokenizer: bool = False)
     logger.info("\n" + "=" * 60)
     logger.info("Index building complete!")
     logger.info(f"Dense index: {dense_index_path} ({dense_index.ntotal} vectors)")
-    #logger.info(f"Sparse index: {sparse_index_path}")
+    logger.info(f"Sparse index: {sparse_index_path}")
     #logger.info(f"Metadata: {metadata_path}")
     logger.info("=" * 60)
 
@@ -502,7 +502,7 @@ def main():
     parser.add_argument(
         '--dataset',
         type=str,
-        default='Datasets/Unified_Dataset/train_100.jsonl',
+        default='Datasets/Unified_Dataset/train.jsonl',
         help='Path to unified dataset JSONL file'
     )
     parser.add_argument(

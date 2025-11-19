@@ -8,16 +8,16 @@ echo "Phase 2 Indexing - Setup Script"
 echo "=========================================="
 
 # Check if virtual environment exists
-if [ ! -d "venv" ]; then
+if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
-    python3 -m venv venv
+    python3 -m venv .venv
 else
     echo "Virtual environment already exists"
 fi
 
 # Activate virtual environment
 echo "Activating virtual environment..."
-source venv/bin/activate
+source .venv/bin/activate
 
 # Install dependencies
 echo "Installing dependencies..."
@@ -29,7 +29,7 @@ echo ""
 echo "=========================================="
 echo "Creating Unified Dataset..."
 echo "=========================================="
-python3 Data_Merger_Module.py
+python3 src/utils/Data_Merger_Module.py
 
 echo ""
 echo "=========================================="
@@ -37,7 +37,7 @@ echo "Setup Complete!"
 echo "=========================================="
 echo ""
 echo "To activate the environment in the future:"
-echo "  source venv/bin/activate"
+echo "  source .venv/bin/activate"
 echo ""
 echo "To test the indexing module:"
 echo "  python3 src/indexing/demo_indexing.py"

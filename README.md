@@ -3,6 +3,19 @@ Author: Dylan L, Alex Aussawlaithong, Dayamoy Datta Saikat
 
 Code Reviews are an important part of Software Development. This essential process of reviewing code from peers can be very time consuming, which drastically affects the productivity of the Software development group. By creating a tool that can generate a summary of written code, we can cut down on the overhead involved in reviewing code.
 
+## Requirements
+
+**Python 3.10 or higher** is required for this project.
+
+Check your Python version:
+```bash
+python3 --version
+```
+
+If you need to install Python 3.10+, visit [python.org/downloads](https://www.python.org/downloads/)
+
+For detailed setup instructions, see [SETUP_GUIDE.md](SETUP_GUIDE.md).
+
 ## Project Status
 
 ✅ **Phase 1**: Dataset exploration and architecture design  
@@ -18,14 +31,20 @@ Code Reviews are an important part of Software Development. This essential proce
 # Clone and navigate to repository
 cd AI-Code-Reviewer
 
-# Run setup script (creates venv, installs dependencies)
+# Activate virtual environment (if already created)
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate   # Windows
+
+# Run setup script (creates .venv, installs dependencies, builds unified dataset)
 chmod +x setup_indexing.sh
 ./setup_indexing.sh
 
 # Or manually:
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
+python3 Data_Merger_Module.py
 ```
 
 ### Test Indexing (Phase 2)
