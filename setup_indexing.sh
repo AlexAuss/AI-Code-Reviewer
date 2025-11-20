@@ -7,6 +7,13 @@ echo "=========================================="
 echo "Phase 2 Indexing - Setup Script"
 echo "=========================================="
 
+if python3.10 -c "import venv" 2>/dev/null; then
+    echo "python3.10-venv is already installed."
+else
+    echo "Installing python3.10-venv..."
+    apt install -y python3.10-venv
+fi
+
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
@@ -29,7 +36,11 @@ echo ""
 echo "=========================================="
 echo "Creating Unified Dataset..."
 echo "=========================================="
-python3 src/utils/Data_Merger_Module.py
+if [[ ! -f "Datasets/Unified_Dataset/train.jsonl" ]]; then
+    python3 src/utils/Data_Merger_Module.py
+else
+    echo "Unified Dataset already exists at Datasets/Unified_Dataset/train.jsonl"
+fi
 
 echo ""
 echo "=========================================="
