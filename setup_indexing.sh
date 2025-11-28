@@ -31,6 +31,19 @@ echo "Installing dependencies..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
+# Install Streamlit UI deps used by the code reviewer
+# These installs are safe even if already present
+echo ""
+echo "=========================================="
+echo "Installing Streamlit UI dependencies"
+echo "=========================================="
+pip install --upgrade \
+    streamlit \
+    streamlit-code-editor
+
+# Optional quality of life packages for Streamlit dev
+pip install --upgrade watchdog
+
 # Run Data Merger Module to create Unified Dataset
 echo ""
 echo "=========================================="
