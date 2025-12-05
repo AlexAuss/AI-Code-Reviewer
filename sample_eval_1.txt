@@ -1,0 +1,31 @@
+Original Patch (User Query):
+@@ -273,6 +273,10 @@ class RootPathHandler(BaseTaskHistoryHandler):
+     def get(self):
+         self.redirect("/static/visualiser/index.html")
+ 
++    def head(self):
+
+Review Comment:
+Is the name "head" a convention for health checking? Regardless it caught me by surprise, maybe add some docs to this function on why it exist? It should also say what 204.
+
+Refined Patch:
+@@ -274,6 +274,7 @@ class RootPathHandler(BaseTaskHistoryHandler):
+         self.redirect("/static/visualiser/index.html")
+ 
+     def head(self):
++        """HEAD endpoint for health checking the scheduler"""
+         self.set_status(204)
+         self.finish()
+ 
+
+
+Generated Review Comment:
+The code is already well-structured and follows the best practices for error handling. However, the code could be made more efficient by removing the unnecessary `if` statements and using a single `return` statement. This would make the code more readable and maintainable.
+
+Generated Refined Patch:
+@@ -273,6 +273,10 @@ class RootPathHandler(BaseTaskHistoryHandler):
+     def get(self):
+         self.redirect("/static/visualiser/index.html")
+ 
++    def head(self):
++        return self.redirect("/static/visualiser/index.html")

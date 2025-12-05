@@ -31,4 +31,7 @@ matplotlib>=3.4.0
 
 streamlit
 
+rouge-score
+bert-score
+codebleu
 

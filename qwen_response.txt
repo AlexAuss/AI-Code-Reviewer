@@ -1,0 +1,24 @@
+Review Comment:
+The code is well-structured and follows the best practices for error handling. However, the print statement is not indented properly, which can lead to indentation errors. The print statement should be at the beginning of the function, not inside the loop.
+
+Refined Patch:
+```python
+def process(self, asgs):
+    client = local_session(self.manager.session_factory).client('autoscaling')
+
+    settings = {}
+    for k, v in self.settings_map.items():
+        if k in self.data:
+            settings[v] = self.data.get(k)
+
+    with self.executor_factory(max_workers=2) as w:
+        futures = {}
+        error = None
+        for a in asgs:
+            futures[w.submit(self.process_asg, client, a, settings)] = a
+        for f in as_completed(futures):
+            if f.exception():
+                error = f.exception()
+        if error:
+            raise error
+```

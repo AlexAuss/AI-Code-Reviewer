@@ -1,0 +1,5 @@
+Samples processed: 1
+Average ROUGE-L F1 Score: 0.1333
+Average BERTScore F1: 0.0695
+Average pass@5: 0.0000
+Average CodeBLEU: 0.0000
