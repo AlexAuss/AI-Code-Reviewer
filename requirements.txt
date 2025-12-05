@@ -28,3 +28,4 @@ rouge-score
 bert-score
 codebleu
 
+streamlit
