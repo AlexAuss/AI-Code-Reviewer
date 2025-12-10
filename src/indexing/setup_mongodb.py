@@ -200,10 +200,10 @@ if __name__ == '__main__':
         sys.exit(1)
     
     # Check if MongoDB is running first
-    if not check_mongodb_status():
-        logger.error("\nPlease start MongoDB first:")
-        logger.error("  brew services start mongodb-community@7.0")
-        sys.exit(1)
+    #if not check_mongodb_status():
+     #   logger.error("\nPlease start MongoDB first:")
+      #  logger.error("  brew services start mongodb-community@7.0")
+       # sys.exit(1)
     
     # Run setup
     success = setup_mongodb()
