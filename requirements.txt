@@ -15,13 +15,19 @@ faiss-cpu>=1.7.4
 sentence-transformers>=2.2.2
 rank-bm25>=0.2.2
 
+# Database
+pymongo>=4.5.0
+
 # LLM APIs / env
 openai>=0.27.0
-python-dotenv>=0.19.0
+python-dotenv>=1.0.0
+urllib3<2.0.0
 
 
 
 pandas
 matplotlib>=3.4.0
+
+streamlit
 
 

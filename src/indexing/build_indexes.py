@@ -12,12 +12,17 @@ The unified dataset schema:
 - source_dataset: "code_refinement" or "comment_generation"
 """
 
+import sys
 import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import numpy as np
 from dataclasses import dataclass
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 # Dense embeddings
 from sentence_transformers import SentenceTransformer
@@ -27,6 +32,9 @@ import faiss
 # Sparse index (BM25)
 from rank_bm25 import BM25Okapi
 import pickle
+
+# MongoDB for metadata storage
+from src.indexing.db_config import MongoDBManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -369,54 +377,40 @@ class SparseIndexBuilder:
 
 
 class MetadataStore:
-    """Store and retrieve record metadata."""
+    """Store and retrieve record metadata in MongoDB."""
     
     def __init__(self, config: IndexConfig):
         self.config = config
+        self.db_manager = MongoDBManager()
         
-    def save_metadata_from_stream(self, dataset_path: Path, output_path: Path):
+    def save_metadata_batch(self, metadata_batch: List[Dict[str, Any]], upsert: bool = True) -> int:
         """
-        Save metadata by streaming from dataset file.
-        Memory-efficient for large datasets (300K+ records).
+        Save batch of metadata to MongoDB.
         
         Args:
-            dataset_path: Path to unified dataset JSONL file
-            output_path: Path to save metadata
+            metadata_batch: List of metadata documents to insert
+            upsert: If True, use upsert mode to handle duplicates (ensures all _ids exist)
+            
+        Returns:
+            Number of documents inserted/updated
         """
-        logger.info(f"Saving metadata from {dataset_path} (streaming mode)...")
+        if not metadata_batch:
+            return 0
         
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        total_saved = 0
-        with open(output_path, 'w', encoding='utf-8') as out_file:
-            for record in stream_unified_dataset(dataset_path):
-                # Extract essential fields
-                metadata = {
-                    'original_patch': record.get('original_patch', ''),
-                    'refined_patch': record.get('refined_patch', ''),
-                    'review_comment': record.get('review_comment', ''),
-                    'language': record.get('language', ''),
-                    'quality_label': record.get('quality_label'),
-                    'source_dataset': record.get('source_dataset', ''),
-                }
-                out_file.write(json.dumps(metadata, ensure_ascii=False) + '\n')
-                total_saved += 1
-                
-                # Log progress every 10K records
-                if total_saved % 10000 == 0:
-                    logger.info(f"Saved {total_saved} metadata records")
-        
-        logger.info(f"Metadata saved to {output_path} ({total_saved} records)")
+        return self.db_manager.insert_batch(metadata_batch, ordered=False, upsert=upsert)
     
-    def load_metadata(self, metadata_path: Path) -> List[Dict[str, Any]]:
-        """Load metadata from file."""
-        logger.info(f"Loading metadata from {metadata_path}")
-        metadata = []
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                metadata.append(json.loads(line))
-        logger.info(f"Loaded {len(metadata)} metadata records")
-        return metadata
+    def clear_metadata(self):
+        """Clear all metadata from MongoDB collection."""
+        logger.info("Clearing existing metadata from MongoDB...")
+        self.db_manager.clear_collection()
+    
+    def count_metadata(self) -> int:
+        """Count total metadata records in MongoDB."""
+        return self.db_manager.count()
+    
+    def close(self):
+        """Close MongoDB connection."""
+        self.db_manager.close()
 
 
 def stream_unified_dataset(dataset_path: Path):
@@ -442,14 +436,15 @@ def stream_unified_dataset(dataset_path: Path):
                 continue
 
 
-def build_all_indexes(config: IndexConfig, use_codebert_tokenizer: bool = False):
+def build_all_indexes(config: IndexConfig, use_codebert_tokenizer: bool = False, skip_indexes: bool = False):
     """
     Main function to build all indexes (dense + sparse + metadata).
-    Uses streaming to avoid loading entire dataset into memory.
+    OPTIMIZED: Streams dataset ONCE and builds all three simultaneously.
     
     Args:
         config: Index configuration
         use_codebert_tokenizer: If True, use CodeBERT tokenizer for BM25 (better for code)
+        skip_indexes: If True, only build metadata (useful when indexes already exist)
     """
     dataset_path = Path(config.dataset_path)
     index_dir = Path(config.index_output_dir)
@@ -461,34 +456,166 @@ def build_all_indexes(config: IndexConfig, use_codebert_tokenizer: bool = False)
         return
     
     logger.info("=" * 60)
-    logger.info("Starting index building (streaming mode)")
+    logger.info("Starting index building (single-pass streaming mode)")
     logger.info(f"Dataset: {dataset_path}")
     logger.info(f"Output: {index_dir}")
+    logger.info(f"Skip indexes: {skip_indexes}")
     logger.info("=" * 60)
     
-    # Build dense index (streaming)
-    logger.info("\n[1/3] Building Dense FAISS Index...")
-    dense_builder = DenseIndexBuilder(config)
-    dense_index_path = index_dir / config.dense_index_name
-    dense_index = dense_builder.build_index_from_stream(dataset_path, dense_index_path)
+    # Initialize builders
+    dense_builder = None
+    sparse_builder = None
+    metadata_store = MetadataStore(config)
     
-    # Build sparse index (streaming)
-    logger.info("\n[2/3] Building Sparse BM25 Index...")
-    sparse_builder = SparseIndexBuilder(config, use_codebert_tokenizer=use_codebert_tokenizer)
-    sparse_index_path = index_dir / config.sparse_index_name
-    sparse_index = sparse_builder.build_index_from_stream(dataset_path, sparse_index_path)
+    if not skip_indexes:
+        logger.info("\\n[Initializing] Dense and Sparse index builders...")
+        dense_builder = DenseIndexBuilder(config)
+        dense_builder.load_model()
+        sparse_builder = SparseIndexBuilder(config, use_codebert_tokenizer=use_codebert_tokenizer)
     
-    # Save metadata (streaming)
-    # logger.info("\n[3/3] Saving Metadata...")
-    # metadata_store = MetadataStore(config)
-    # metadata_path = index_dir / config.metadata_file
-    # metadata_store.save_metadata_from_stream(dataset_path, metadata_path)
+    # Clear existing metadata
+    logger.info("\\n[Preparing] MongoDB metadata storage...")
+    metadata_store.clear_metadata()
     
-    logger.info("\n" + "=" * 60)
+    # Single-pass processing
+    logger.info("\\n[Processing] Streaming dataset (single pass for all indexes + metadata)...")
+    
+    # Accumulators for dense and sparse
+    dense_embeddings_list = [] if not skip_indexes else None
+    tokenized_corpus = [] if not skip_indexes else None
+    
+    # Metadata batch
+    metadata_batch = []
+    metadata_batch_size = 1000
+    
+    # Counters
+    total_processed = 0
+    chunk_size = 1000
+    chunk_records = []
+    
+    # Stream and process
+    for record in stream_unified_dataset(dataset_path):
+        chunk_records.append(record)
+        
+        # Process when chunk is full
+        if len(chunk_records) >= chunk_size:
+            # Process chunk for indexes and metadata
+            if not skip_indexes:
+                # Dense: create embeddings
+                texts = [dense_builder.create_embedding_text(rec) for rec in chunk_records]
+                chunk_embeddings = dense_builder.model.encode(
+                    texts,
+                    show_progress_bar=False,
+                    batch_size=config.batch_size,
+                    convert_to_numpy=True
+                ).astype('float32')
+                faiss.normalize_L2(chunk_embeddings)
+                dense_embeddings_list.append(chunk_embeddings)
+                
+                # Sparse: tokenize
+                for rec in chunk_records:
+                    text = sparse_builder.create_sparse_text(rec)
+                    tokens = sparse_builder.tokenize(text)
+                    tokenized_corpus.append(tokens)
+            
+            # Metadata: prepare for MongoDB
+            for idx, rec in enumerate(chunk_records):
+                doc_id = total_processed + idx
+                metadata = {
+                    '_id': doc_id,  # Match FAISS index position
+                    'original_file': rec.get('original_file'),
+                    'original_patch': rec.get('original_patch') or '',
+                    'refined_patch': rec.get('refined_patch'),
+                    'review_comment': rec.get('review_comment') or '',
+                    'language': rec.get('language') or '',
+                    'quality_label': rec.get('quality_label'),
+                    'source_dataset': rec.get('source_dataset') or '',
+                }
+                metadata_batch.append(metadata)
+            
+            # Insert metadata batch to MongoDB
+            if len(metadata_batch) >= metadata_batch_size:
+                inserted = metadata_store.save_metadata_batch(metadata_batch)
+                logger.info(f"Inserted {inserted} metadata records to MongoDB")
+                metadata_batch = []
+            
+            total_processed += len(chunk_records)
+            logger.info(f"Processed {total_processed} records")
+            chunk_records = []
+    
+    # Process remaining records
+    if chunk_records:
+        if not skip_indexes:
+            texts = [dense_builder.create_embedding_text(rec) for rec in chunk_records]
+            chunk_embeddings = dense_builder.model.encode(
+                texts,
+                show_progress_bar=False,
+                batch_size=config.batch_size,
+                convert_to_numpy=True
+            ).astype('float32')
+            faiss.normalize_L2(chunk_embeddings)
+            dense_embeddings_list.append(chunk_embeddings)
+            
+            for rec in chunk_records:
+                text = sparse_builder.create_sparse_text(rec)
+                tokens = sparse_builder.tokenize(text)
+                tokenized_corpus.append(tokens)
+        
+        for idx, rec in enumerate(chunk_records):
+            doc_id = total_processed + idx
+            metadata = {
+                '_id': doc_id,
+                'original_file': rec.get('original_file'),
+                'original_patch': rec.get('original_patch') or '',
+                'refined_patch': rec.get('refined_patch'),
+                'review_comment': rec.get('review_comment') or '',
+                'language': rec.get('language') or '',
+                'quality_label': rec.get('quality_label'),
+                'source_dataset': rec.get('source_dataset') or '',
+            }
+            metadata_batch.append(metadata)
+        
+        total_processed += len(chunk_records)
+        logger.info(f"Processed {total_processed} records (final)")
+    
+    # Insert remaining metadata
+    if metadata_batch:
+        inserted = metadata_store.save_metadata_batch(metadata_batch)
+        logger.info(f"Inserted {inserted} metadata records to MongoDB (final)")
+    
+    # Build indexes from accumulated data
+    if not skip_indexes:
+        # Dense index
+        logger.info("\\n[Building] Dense FAISS index from embeddings...")
+        all_embeddings = np.vstack(dense_embeddings_list)
+        dense_index = faiss.IndexFlatIP(dense_builder.dimension)
+        dense_index.add(all_embeddings)
+        dense_index_path = index_dir / config.dense_index_name
+        faiss.write_index(dense_index, str(dense_index_path))
+        logger.info(f"Dense index saved: {dense_index_path} ({dense_index.ntotal} vectors)")
+        
+        # Sparse index
+        logger.info("\\n[Building] Sparse BM25 index from tokenized corpus...")
+        sparse_index = BM25Okapi(tokenized_corpus)
+        sparse_index_path = index_dir / config.sparse_index_name
+        with open(sparse_index_path, 'wb') as f:
+            pickle.dump({'bm25': sparse_index, 'corpus': tokenized_corpus}, f)
+        logger.info(f"Sparse index saved: {sparse_index_path} ({len(tokenized_corpus)} documents)")
+    
+    # Verify metadata
+    total_metadata = metadata_store.count_metadata()
+    logger.info(f"\\n[Verified] MongoDB metadata count: {total_metadata}")
+    
+    # Close MongoDB connection
+    metadata_store.close()
+    
+    logger.info("\\n" + "=" * 60)
     logger.info("Index building complete!")
-    logger.info(f"Dense index: {dense_index_path} ({dense_index.ntotal} vectors)")
-    logger.info(f"Sparse index: {sparse_index_path}")
-    #logger.info(f"Metadata: {metadata_path}")
+    logger.info(f"Total records processed: {total_processed}")
+    if not skip_indexes:
+        logger.info(f"Dense index: {dense_index_path} ({dense_index.ntotal} vectors)")
+        logger.info(f"Sparse index: {sparse_index_path}")
+    logger.info(f"Metadata (MongoDB): {total_metadata} records")
     logger.info("=" * 60)
 
 
@@ -539,6 +666,11 @@ def main():
         default=None,
         help='Comma-separated list of fields to embed (overrides --dense-code-only). Possible fields: language,original_patch,refined_patch,review_comment'
     )
+    parser.add_argument(
+        '--skip-indexes',
+        action='store_true',
+        help='Skip building FAISS and BM25 indexes, only build metadata in MongoDB (useful when indexes already exist)'
+    )
     
     args = parser.parse_args()
     
@@ -557,7 +689,7 @@ def main():
         dense_embedding_fields=dense_fields
     )
     
-    build_all_indexes(config, use_codebert_tokenizer=args.use_codebert_tokenizer)
+    build_all_indexes(config, use_codebert_tokenizer=args.use_codebert_tokenizer, skip_indexes=args.skip_indexes)
 
 
 if __name__ == '__main__':

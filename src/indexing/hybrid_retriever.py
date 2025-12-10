@@ -3,18 +3,25 @@ Hybrid retriever combining dense (FAISS) and sparse (BM25) search.
 Implements reciprocal rank fusion for result merging.
 """
 
+import sys
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import models as st_models
 import faiss
 from rank_bm25 import BM25Okapi
 import pickle
-from typing import Optional
+
+# MongoDB for metadata retrieval
+from src.indexing.db_config import MongoDBManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,7 +61,7 @@ class HybridRetriever:
         self.dense_index = None
         self.sparse_index = None
         self.tokenized_corpus = None
-        self.metadata = None
+        self.db_manager = None  # MongoDB manager for metadata
         self._cb_tokenizer = None
         
     def load_indexes(self):
@@ -93,15 +100,12 @@ class HybridRetriever:
             self.tokenized_corpus = sparse_data['corpus']
         logger.info(f"Loaded BM25 index with {len(self.tokenized_corpus)} documents")
         
-        # Load metadata
-        metadata_path = self.index_dir / "metadata.jsonl"
-        if not metadata_path.exists():
-            raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-        self.metadata = []
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                self.metadata.append(json.loads(line))
-        logger.info(f"Loaded metadata for {len(self.metadata)} records")
+        # Connect to MongoDB for metadata
+        logger.info("Connecting to MongoDB for metadata...")
+        self.db_manager = MongoDBManager()
+        self.db_manager.connect()
+        metadata_count = self.db_manager.count()
+        logger.info(f"Connected to MongoDB with {metadata_count} metadata records")
         
     def create_query_text(self, original_code: str, changed_code: str) -> str:
         """
@@ -294,13 +298,25 @@ class HybridRetriever:
         # Get top-k final results
         final_results = fused_results[:top_k]
         
-        # Retrieve metadata
+        # Retrieve metadata from MongoDB (batch query)
+        doc_ids = [doc_id for doc_id, _ in final_results]
+        metadata_records = self.db_manager.get_by_ids(doc_ids)
+        
+        # Create result map for fast lookup
+        metadata_map = {rec['_id']: rec for rec in metadata_records}
+        
+        # Build final results with scores
         retrieved_records = []
         for doc_id, fused_score in final_results:
-            record = self.metadata[doc_id].copy()
-            record['doc_id'] = doc_id
-            record['retrieval_score'] = fused_score
-            retrieved_records.append(record)
+            if doc_id in metadata_map:
+                record = metadata_map[doc_id].copy()
+                # Remove MongoDB _id from result (use doc_id instead)
+                record.pop('_id', None)
+                record['doc_id'] = doc_id
+                record['retrieval_score'] = fused_score
+                retrieved_records.append(record)
+            else:
+                logger.warning(f"Metadata not found for doc_id={doc_id}")
         
         logger.info(f"Retrieved {len(retrieved_records)} records")
         return retrieved_records
