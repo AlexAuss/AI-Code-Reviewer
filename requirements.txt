@@ -14,6 +14,7 @@ langchain>=0.0.150
 faiss-cpu>=1.7.4
 sentence-transformers>=2.2.2
 rank-bm25>=0.2.2
+bm25s>=0.2.0  # Fast BM25 implementation (100x faster than rank_bm25)
 
 # Database
 pymongo>=4.5.0
