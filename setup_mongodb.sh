@@ -32,8 +32,8 @@ NC='\033[0m' # No Color
 # Check if running in virtual environment
 if [[ -z "$VIRTUAL_ENV" ]]; then
     echo -e "${RED}❌ Error: Not in a virtual environment${NC}"
-    echo "Activating virtual environment..."
-    source .venv/bin/activate
+    echo "Please activate your virtual environment first:"
+    echo "  source venv/bin/activate"
     exit 1
 fi
 
@@ -83,7 +83,7 @@ echo ""
 # Step 4: Install Python dependencies
 echo "🐍 Step 4: Installing Python dependencies..."
 pip install --upgrade pip > /dev/null 2>&1
-pip install -r requirements.txt > /dev/null 2>&1
+pip install pymongo python-dotenv > /dev/null 2>&1
 echo -e "${GREEN}✅ Python dependencies installed${NC}"
 echo ""
 
@@ -133,10 +133,10 @@ if [ $? -eq 0 ]; then
     echo ""
     echo "Next steps:"
     echo "  1. Build indexes and metadata:"
-    echo "     python src/indexing/build_indexes.py --dataset Datasets/Unified_Dataset/train.jsonl --skip-indexes"
+    echo "     python src/indexing/build_indexes.py --dataset Datasets/Unified_Dataset/train_100.jsonl"
     echo ""
     echo "  2. Test retrieval:"
-    echo "     python src/indexing/hybrid_retriever.py --patch 'def foo(): return 1'"
+    echo "     python src/indexing/demo_retriever.py --patch 'def foo(): return 1'"
     echo ""
     echo "MongoDB Info:"
     echo "  • Database: ai_code_reviewer"
