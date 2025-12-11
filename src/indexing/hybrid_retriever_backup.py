@@ -1,13 +1,6 @@
 """
 Hybrid retriever combining dense (FAISS) and sparse (BM25) search.
 Implements reciprocal rank fusion for result merging.
-
-OPTIMIZATIONS:
-- MPS/CUDA/CPU automatic device selection for embeddings
-- IVF FAISS index support for fast approximate search
-- bm25s library for fast sparse retrieval
-- Parallel dense/sparse search execution
-- FastBM25 inverted index fallback for rank_bm25
 """
 
 import sys
@@ -17,8 +10,6 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from collections import defaultdict
 import numpy as np
 
 # Add project root to path for imports
@@ -28,6 +19,7 @@ sys.path.insert(0, str(project_root))
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import models as st_models
 import faiss
+from rank_bm25 import BM25Okapi
 import pickle
 
 # MongoDB for metadata retrieval
@@ -35,28 +27,6 @@ from src.indexing.db_config import MongoDBManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def get_optimal_device() -> str:
-    """
-    Detect optimal device for embedding model.
-    Priority: MPS (Apple Silicon) > CUDA (NVIDIA) > CPU
-    """
-    import torch
-    
-    # Check for Apple Silicon MPS
-    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        logger.info("Using MPS (Apple Silicon GPU) for embeddings")
-        return 'mps'
-    
-    # Check for NVIDIA CUDA
-    if torch.cuda.is_available():
-        logger.info(f"Using CUDA GPU: {torch.cuda.get_device_name(0)}")
-        return 'cuda'
-    
-    # Fallback to CPU
-    logger.info("Using CPU for embeddings (no GPU detected)")
-    return 'cpu'
 
 
 @dataclass
@@ -77,17 +47,11 @@ class TimingStats:
     bm25_tokenize_ms: float = 0.0
     bm25_search_ms: float = 0.0
     sparse_search_total_ms: float = 0.0
-    parallel_search_ms: float = 0.0  # Time for parallel execution
     rrf_fusion_ms: float = 0.0
     mongodb_fetch_ms: float = 0.0
     total_retrieval_ms: float = 0.0
     
-    # Device info
-    device_used: str = 'cpu'
-    faiss_index_type: str = 'unknown'
-    bm25_library: str = 'unknown'
-    
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, float]:
         """Convert to dictionary."""
         return {
             'loading': {
@@ -105,15 +69,9 @@ class TimingStats:
                 'bm25_tokenize_ms': self.bm25_tokenize_ms,
                 'bm25_search_ms': self.bm25_search_ms,
                 'sparse_search_total_ms': self.sparse_search_total_ms,
-                'parallel_search_ms': self.parallel_search_ms,
                 'rrf_fusion_ms': self.rrf_fusion_ms,
                 'mongodb_fetch_ms': self.mongodb_fetch_ms,
                 'total_retrieval_ms': self.total_retrieval_ms,
-            },
-            'config': {
-                'device_used': self.device_used,
-                'faiss_index_type': self.faiss_index_type,
-                'bm25_library': self.bm25_library,
             }
         }
     
@@ -122,18 +80,18 @@ class TimingStats:
         print("\n" + "=" * 60)
         print("PERFORMANCE TIMING SUMMARY (milliseconds)")
         print("=" * 60)
-        print(f"\n⚙️  CONFIGURATION:")
-        print(f"  • Device: {self.device_used}")
-        print(f"  • FAISS Index: {self.faiss_index_type}")
-        print(f"  • BM25 Library: {self.bm25_library}")
-        
         print("\n📦 LOADING TIMES (one-time cost):")
         print(f"  • Embedding Model Load:  {self.embedding_model_load_ms:>10.2f} ms")
-        print(f"  • Model Warmup (GPU):    {self.model_warmup_ms:>10.2f} ms")
+        print(f"  • Model Warmup (MPS/GPU):{self.model_warmup_ms:>10.2f} ms")
         print(f"  • FAISS Index Load:      {self.faiss_index_load_ms:>10.2f} ms")
         print(f"  • BM25 Index Load:       {self.bm25_index_load_ms:>10.2f} ms")
         print(f"  • MongoDB Connect:       {self.mongodb_connect_ms:>10.2f} ms")
         print(f"  ─────────────────────────────────────")
+        # Calculate sum of individual times
+        individual_sum = (self.embedding_model_load_ms + self.model_warmup_ms + 
+                         self.faiss_index_load_ms + self.bm25_index_load_ms + 
+                         self.mongodb_connect_ms)
+        print(f"  • Sum of above:          {individual_sum:>10.2f} ms")
         print(f"  • TOTAL LOAD TIME:       {self.total_load_ms:>10.2f} ms")
         
         print("\n🔍 RETRIEVAL TIMES (per-query):")
@@ -145,8 +103,6 @@ class TimingStats:
         print(f"    • BM25 Tokenization:   {self.bm25_tokenize_ms:>10.2f} ms")
         print(f"    • BM25 Search:         {self.bm25_search_ms:>10.2f} ms")
         print(f"    • Sparse Total:        {self.sparse_search_total_ms:>10.2f} ms")
-        print(f"  Parallel Execution:")
-        print(f"    • Parallel Search:     {self.parallel_search_ms:>10.2f} ms")
         print(f"  Fusion & Metadata:")
         print(f"    • RRF Fusion:          {self.rrf_fusion_ms:>10.2f} ms")
         print(f"    • MongoDB Fetch:       {self.mongodb_fetch_ms:>10.2f} ms")
@@ -155,12 +111,13 @@ class TimingStats:
         print("=" * 60 + "\n")
 
 
+from collections import defaultdict
+import math
+
 class FastBM25:
     """
     Optimized BM25 using inverted index for sparse retrieval.
-    Replaces rank_bm25's O(n) scan with O(relevant docs) lookup.
-    
-    Used as fallback when bm25s is not available.
+    Replaces rank_bm25 check-all-docs approach.
     """
     def __init__(self, bm25_object):
         self.k1 = bm25_object.k1
@@ -171,7 +128,8 @@ class FastBM25:
         self.doc_len = bm25_object.doc_len
         self.n_docs = len(self.doc_len)
         
-        # Build inverted index: token -> list of (doc_id, freq)
+        # Build inverted index
+        # token -> list of (doc_id, freq)
         self.inverted_index = defaultdict(list)
         logger.info("Building inverted index for FastBM25...")
         start = time.perf_counter()
@@ -179,10 +137,10 @@ class FastBM25:
             for token, freq in freq_map.items():
                 self.inverted_index[token].append((doc_id, freq))
         build_time = (time.perf_counter() - start) * 1000
-        logger.info(f"Inverted index built in {build_time:.2f} ms ({len(self.inverted_index)} unique tokens)")
+        logger.info(f"Inverted index built in {build_time:.2f} ms")
         
     def get_scores_fast(self, query_tokens: List[str], top_k: int = 20) -> List[Tuple[int, float]]:
-        """Calculate BM25 scores only for documents containing query tokens."""
+        """Calculate BM25 scores only for relevant docs."""
         scores = defaultdict(float)
         
         for token in query_tokens:
@@ -191,6 +149,7 @@ class FastBM25:
                 
             idf = self.idf.get(token)
             if idf is None:
+                # OOV handling if needed, usually rank_bm25 handles this
                 continue
                 
             # Iterate only docs containing token
@@ -199,21 +158,15 @@ class FastBM25:
                 score = idf * (freq * (self.k1 + 1)) / denom
                 scores[doc_id] += score
                 
-        # Sort and take top_k (only docs with matches)
+        # Sort and take top_k
+        # This sorts only documents that had at least one match
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
         return sorted_scores
-
 
 class HybridRetriever:
     """
     Hybrid retriever combining dense semantic search (FAISS) 
     and sparse keyword search (BM25) with reciprocal rank fusion.
-    
-    Optimizations:
-    - Automatic GPU/MPS detection for fast embeddings
-    - Support for IVF FAISS indexes (1000x faster search)
-    - Support for bm25s library (100x faster sparse search)
-    - Parallel dense/sparse search execution
     """
     
     def __init__(
@@ -223,10 +176,7 @@ class HybridRetriever:
         dense_weight: float = 0.5,
         sparse_weight: float = 0.5,
         use_codebert_tokenizer: bool = False,
-        device: str = None,
-        use_ivf_index: bool = True,
-        faiss_nprobe: int = 32,
-        parallel_search: bool = True
+        device: str = None
     ):
         """
         Initialize hybrid retriever.
@@ -236,11 +186,7 @@ class HybridRetriever:
             embedding_model: Sentence transformer model name
             dense_weight: Weight for dense retrieval scores (0-1)
             sparse_weight: Weight for sparse retrieval scores (0-1)
-            use_codebert_tokenizer: Use CodeBERT tokenizer for BM25
-            device: Device for embedding model ('cpu', 'cuda', 'mps', or None for auto)
-            use_ivf_index: Prefer IVF index if available (faster search)
-            faiss_nprobe: Number of clusters to probe for IVF search
-            parallel_search: Run dense and sparse search in parallel
+            device: Device to use for embedding model ('cpu', 'cuda', 'mps')
         """
         self.index_dir = Path(index_dir)
         self.embedding_model_name = embedding_model
@@ -248,40 +194,30 @@ class HybridRetriever:
         self.sparse_weight = sparse_weight
         self.use_codebert_tokenizer = use_codebert_tokenizer
         self.device = device
-        self.use_ivf_index = use_ivf_index
-        self.faiss_nprobe = faiss_nprobe
-        self.parallel_search = parallel_search
         
         # To be loaded
         self.dense_model = None
         self.dense_index = None
-        self.sparse_index = None  # bm25s or rank_bm25
+        self.sparse_index = None
         self.tokenized_corpus = None
-        self.fast_bm25 = None  # FastBM25 wrapper for rank_bm25
-        self.db_manager = None
+        self.db_manager = None  # MongoDB manager for metadata
+        self.tokenized_corpus = None
+        self.db_manager = None  # MongoDB manager for metadata
         self._cb_tokenizer = None
-        
-        # BM25 library detection
-        self.bm25_library = None  # 'bm25s' or 'rank_bm25'
+        self.fast_bm25 = None
         
         # Timing statistics
         self.timing = TimingStats()
         
     def load_indexes(self):
-        """Load all indexes and metadata with optimizations."""
+        """Load all indexes and metadata."""
         logger.info("Loading indexes...")
         total_load_start = time.perf_counter()
         
-        # Detect optimal device
-        if self.device is None:
-            self.device = get_optimal_device()
-        self.timing.device_used = self.device
-        
         # Load dense embedding model
         model_name = self.embedding_model_name
-        logger.info(f"Loading embedding model: {model_name} on {self.device}")
+        logger.info(f"Loading embedding model: {model_name}")
         embed_start = time.perf_counter()
-        
         if any(tag in model_name.lower() for tag in ["codebert", "graphcodebert"]):
             transformer = st_models.Transformer(model_name, max_seq_length=512)
             pooling = st_models.Pooling(
@@ -290,149 +226,90 @@ class HybridRetriever:
                 pooling_mode_cls_token=False,
                 pooling_mode_max_tokens=False,
             )
-            self.dense_model = SentenceTransformer(modules=[transformer, pooling], device=self.device)
+            self.dense_model = SentenceTransformer(modules=[transformer, pooling])
         else:
-            self.dense_model = SentenceTransformer(model_name, device=self.device)
-        
+            self.dense_model = SentenceTransformer(model_name)
         self.timing.embedding_model_load_ms = (time.perf_counter() - embed_start) * 1000
-        logger.info(f"Embedding model loaded in {self.timing.embedding_model_load_ms:.0f} ms")
         
         # Warm up the model (first encode initializes GPU/MPS backend)
         warmup_start = time.perf_counter()
-        _ = self.dense_model.encode(["warmup query for initialization"], convert_to_numpy=True)
+        _ = self.dense_model.encode(["warmup"], convert_to_numpy=True)
         self.timing.model_warmup_ms = (time.perf_counter() - warmup_start) * 1000
-        logger.info(f"Model warmup completed in {self.timing.model_warmup_ms:.0f} ms")
+        logger.info(f"Model warmup completed")
         
-        # Load FAISS index (prefer IVF if available)
+        # Load FAISS index
         faiss_start = time.perf_counter()
-        self._load_faiss_index()
+        dense_path = self.index_dir / "dense_faiss.index"
+        if not dense_path.exists():
+            raise FileNotFoundError(f"Dense index not found: {dense_path}")
+        self.dense_index = faiss.read_index(str(dense_path))
         self.timing.faiss_index_load_ms = (time.perf_counter() - faiss_start) * 1000
-        logger.info(f"FAISS index loaded in {self.timing.faiss_index_load_ms:.0f} ms")
+        logger.info(f"Loaded FAISS index with {self.dense_index.ntotal} vectors")
         
-        # Load BM25 index (prefer bm25s if available)
+        # Load BM25 index
         bm25_start = time.perf_counter()
-        self._load_bm25_index()
+        sparse_path = self.index_dir / "sparse_bm25.pkl"
+        if not sparse_path.exists():
+            raise FileNotFoundError(f"Sparse index not found: {sparse_path}")
+        with open(sparse_path, 'rb') as f:
+            sparse_data = pickle.load(f)
+            self.sparse_index = sparse_data['bm25']
+            self.tokenized_corpus = sparse_data['corpus']
         self.timing.bm25_index_load_ms = (time.perf_counter() - bm25_start) * 1000
-        logger.info(f"BM25 index loaded in {self.timing.bm25_index_load_ms:.0f} ms")
+        logger.info(f"Loaded BM25 index with {len(self.tokenized_corpus)} documents")
         
         # Connect to MongoDB for metadata
         mongo_start = time.perf_counter()
         logger.info("Connecting to MongoDB for metadata...")
         self.db_manager = MongoDBManager()
         self.db_manager.connect()
-        metadata_count = self.db_manager.count()
+        metadata_count = self.db_manager.count()  # Include count in connection time
         self.timing.mongodb_connect_ms = (time.perf_counter() - mongo_start) * 1000
-        logger.info(f"Connected to MongoDB ({metadata_count} records) in {self.timing.mongodb_connect_ms:.0f} ms")
+        logger.info(f"Connected to MongoDB with {metadata_count} metadata records")
         
         # Record total load time
         self.timing.total_load_ms = (time.perf_counter() - total_load_start) * 1000
-        logger.info(f"Total loading time: {self.timing.total_load_ms:.0f} ms")
-        
-    def _load_faiss_index(self):
-        """Load FAISS index, preferring IVF if available and requested."""
-        ivf_path = self.index_dir / "dense_faiss_ivf.index"
-        flat_path = self.index_dir / "dense_faiss.index"
-        
-        # Try IVF index first if requested
-        if self.use_ivf_index and ivf_path.exists():
-            logger.info(f"Loading optimized IVF index: {ivf_path}")
-            self.dense_index = faiss.read_index(str(ivf_path))
-            
-            # Set nprobe for search accuracy
-            if hasattr(self.dense_index, 'nprobe'):
-                self.dense_index.nprobe = self.faiss_nprobe
-                logger.info(f"Set FAISS nprobe={self.faiss_nprobe}")
-            
-            self.timing.faiss_index_type = f"IndexIVFFlat (nprobe={self.faiss_nprobe})"
-            
-        elif flat_path.exists():
-            logger.info(f"Loading flat index: {flat_path}")
-            self.dense_index = faiss.read_index(str(flat_path))
-            self.timing.faiss_index_type = "IndexFlatIP (brute-force)"
-            
-        else:
-            raise FileNotFoundError(
-                f"No FAISS index found. Looked for:\n"
-                f"  - {ivf_path}\n"
-                f"  - {flat_path}"
-            )
-        
-        logger.info(f"Loaded FAISS index with {self.dense_index.ntotal} vectors")
-        
-    def _load_bm25_index(self):
-        """Load BM25 index, preferring bm25s if available."""
-        bm25s_path = self.index_dir / "sparse_bm25s"
-        rank_bm25_path = self.index_dir / "sparse_bm25.pkl"
-        
-        # Try bm25s first (much faster)
-        if bm25s_path.exists():
-            try:
-                import bm25s
-                logger.info(f"Loading bm25s index: {bm25s_path}")
-                self.sparse_index = bm25s.BM25.load(str(bm25s_path), load_corpus=False)
-                self.bm25_library = 'bm25s'
-                self.timing.bm25_library = 'bm25s (optimized)'
-                num_docs = self.sparse_index.scores.get('num_docs', 'unknown')
-                logger.info(f"Loaded bm25s index with {num_docs} documents")
-                return
-            except ImportError:
-                logger.warning("bm25s not installed, falling back to rank_bm25")
-            except Exception as e:
-                logger.warning(f"Failed to load bm25s index: {e}, falling back to rank_bm25")
-        
-        # Fall back to rank_bm25
-        if rank_bm25_path.exists():
-            logger.info(f"Loading rank_bm25 index: {rank_bm25_path}")
-            with open(rank_bm25_path, 'rb') as f:
-                sparse_data = pickle.load(f)
-                self.sparse_index = sparse_data['bm25']
-                self.tokenized_corpus = sparse_data.get('corpus')
-            
-            # Build FastBM25 inverted index for faster search
-            logger.info("Building FastBM25 inverted index...")
-            self.fast_bm25 = FastBM25(self.sparse_index)
-            
-            self.bm25_library = 'rank_bm25'
-            self.timing.bm25_library = 'rank_bm25 + FastBM25'
-            
-            corpus_size = len(self.tokenized_corpus) if self.tokenized_corpus else 'unknown'
-            logger.info(f"Loaded rank_bm25 index with {corpus_size} documents")
-        else:
-            raise FileNotFoundError(
-                f"No BM25 index found. Looked for:\n"
-                f"  - {bm25s_path}\n"
-                f"  - {rank_bm25_path}"
-            )
         
     def create_query_text(self, original_code: str, changed_code: str) -> str:
-        """Create query text from user's code diff."""
-        query_parts = []
-        if original_code:
-            query_parts.append(f"Original code:\n{original_code}")
-        if changed_code:
-            query_parts.append(f"Changed code:\n{changed_code}")
+        """
+        Create query text from user's code diff.
+        
+        Args:
+            original_code: The old/before code
+            changed_code: The new/after code
+            
+        Returns:
+            Formatted query text for embedding
+        """
+        # Truncate to prevent BM25 performance issues with large files
+        # 2048 chars is roughly 512 tokens, usually enough for a diff context
+        max_len = 2048 
+        
+        orig_trunc = original_code[:max_len] if original_code else ""
+        changed_trunc = changed_code[:max_len] if changed_code else ""
+        
+        # Generate a simple unified diff representation
+        query_parts = [
+            f"Original code:\n{original_code}",
+            f"Changed code:\n{changed_code}"
+        ]
         return "\n\n".join(query_parts)
     
     def tokenize(self, text: str) -> List[str]:
-        """Code-aware tokenization for BM25 queries."""
+        """Code-aware tokenization to better match BM25 indexing."""
         import re
-        
         # Optional: use CodeBERT tokenizer if requested
-        if self.use_codebert_tokenizer:
-            if self._cb_tokenizer is None:
-                try:
-                    from transformers import AutoTokenizer
-                    self._cb_tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
-                except Exception:
-                    self._cb_tokenizer = False
-                    logger.warning("Failed to load CodeBERT tokenizer; using regex tokenization.")
-            
-            if self._cb_tokenizer:
-                toks = self._cb_tokenizer.tokenize(text)
-                toks = [t for t in toks if not t.startswith('Ġ') and t not in ['<s>', '</s>', '<pad>']]
-                return toks
-        
-        # Enhanced regex tokenizer
+        if self.use_codebert_tokenizer and self._cb_tokenizer is None:
+            try:
+                from transformers import AutoTokenizer
+                self._cb_tokenizer = AutoTokenizer.from_pretrained("microsoft/codebert-base")
+            except Exception:
+                self._cb_tokenizer = None
+                logger.warning("Failed to load CodeBERT tokenizer; falling back to regex tokenization.")
+        if self._cb_tokenizer is not None and self.use_codebert_tokenizer:
+            toks = self._cb_tokenizer.tokenize(text)
+            toks = [t for t in toks if not t.startswith('Ġ') and t not in ['<s>', '</s>', '<pad>']]
+            return toks
         # Split CamelCase
         s = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
         # Split snake/kebab
@@ -440,19 +317,23 @@ class HybridRetriever:
         # Preserve operators
         s = re.sub(r'([+\-*/=<>!&|{}()\[\]])', r' \1 ', s)
         tokens = re.findall(r'\b\w+\b', s.lower())
-        
-        # Add bigrams
         bigrams = [f"{tokens[i]}_{tokens[i+1]}" for i in range(len(tokens)-1)] if len(tokens) > 1 else []
         all_tokens = tokens + bigrams
-        
-        # Add code patterns
         code_patterns = re.findall(r'\b(?:if|else|for|while|return|null|nullptr|none|undefined)\b', s.lower())
         all_tokens.extend(code_patterns)
-        
         return all_tokens
     
     def dense_search(self, query_text: str, top_k: int = 10) -> List[Tuple[int, float]]:
-        """Perform dense semantic search using FAISS."""
+        """
+        Perform dense semantic search using FAISS.
+        
+        Args:
+            query_text: Query text to embed and search
+            top_k: Number of top results to return
+            
+        Returns:
+            List of (doc_id, similarity_score) tuples
+        """
         dense_start = time.perf_counter()
         
         # Embed query
@@ -461,50 +342,58 @@ class HybridRetriever:
             [query_text],
             convert_to_numpy=True
         ).astype('float32')
-        faiss.normalize_L2(query_embedding)
-        embed_time = (time.perf_counter() - embed_start) * 1000
         
-        # Search FAISS index
+        # Normalize for cosine similarity
+        faiss.normalize_L2(query_embedding)
+        self.timing.query_embedding_ms = (time.perf_counter() - embed_start) * 1000
+        
+        # Search
         search_start = time.perf_counter()
         distances, indices = self.dense_index.search(query_embedding, top_k)
-        search_time = (time.perf_counter() - search_start) * 1000
+        self.timing.faiss_search_ms = (time.perf_counter() - search_start) * 1000
         
-        # Build results
+        # Return (doc_id, score) tuples
         results = []
         for idx, score in zip(indices[0], distances[0]):
-            if idx != -1:
+            if idx != -1:  # Valid result
                 results.append((int(idx), float(score)))
         
-        total_time = (time.perf_counter() - dense_start) * 1000
-        
-        return results, embed_time, search_time, total_time
+        self.timing.dense_search_total_ms = (time.perf_counter() - dense_start) * 1000
+        return results
     
     def sparse_search(self, query_text: str, top_k: int = 10) -> List[Tuple[int, float]]:
-        """Perform sparse keyword search using BM25."""
+        """
+        Perform sparse keyword search using BM25.
+        
+        Args:
+            query_text: Query text to tokenize and search
+            top_k: Number of top results to return
+            
+        Returns:
+            List of (doc_id, bm25_score) tuples
+        """
         sparse_start = time.perf_counter()
         
         # Tokenize query
         tokenize_start = time.perf_counter()
         query_tokens = self.tokenize(query_text)
-        tokenize_time = (time.perf_counter() - tokenize_start) * 1000
+        self.timing.bm25_tokenize_ms = (time.perf_counter() - tokenize_start) * 1000
         
-        # Search based on library
+        # Get BM25 scores
         search_start = time.perf_counter()
+        scores = self.sparse_index.get_scores(query_tokens)
         
-        if self.bm25_library == 'bm25s':
-            # bm25s search
-            import bm25s
-            query_tokens_bm25s = bm25s.tokenize([" ".join(query_tokens)], show_progress=False)
-            results_arr, scores_arr = self.sparse_index.retrieve(query_tokens_bm25s, k=top_k)
-            results = [(int(idx), float(score)) for idx, score in zip(results_arr[0], scores_arr[0])]
-        else:
-            # Use FastBM25 (inverted index) instead of rank_bm25's O(n) scan
-            results = self.fast_bm25.get_scores_fast(query_tokens, top_k=top_k)
+        # Get top-k indices
+        top_indices = np.argsort(scores)[::-1][:top_k]
+        self.timing.bm25_search_ms = (time.perf_counter() - search_start) * 1000
         
-        search_time = (time.perf_counter() - search_start) * 1000
-        total_time = (time.perf_counter() - sparse_start) * 1000
+        # Return (doc_id, score) tuples
+        results = []
+        for idx in top_indices:
+            results.append((int(idx), float(scores[idx])))
         
-        return results, tokenize_time, search_time, total_time
+        self.timing.sparse_search_total_ms = (time.perf_counter() - sparse_start) * 1000
+        return results
     
     def reciprocal_rank_fusion(
         self,
@@ -512,7 +401,19 @@ class HybridRetriever:
         sparse_results: List[Tuple[int, float]],
         k: int = 60
     ) -> List[Tuple[int, float]]:
-        """Merge results using Reciprocal Rank Fusion (RRF)."""
+        """
+        Merge dense and sparse results using Reciprocal Rank Fusion (RRF).
+        
+        RRF score for document d: sum over all rankings R: 1 / (k + rank_R(d))
+        
+        Args:
+            dense_results: Results from dense search
+            sparse_results: Results from sparse search
+            k: RRF constant (typically 60)
+            
+        Returns:
+            Merged and sorted list of (doc_id, fused_score) tuples
+        """
         rrf_start = time.perf_counter()
         
         # Build rank maps
@@ -533,7 +434,11 @@ class HybridRetriever:
             rrf_scores[doc_id] = score
         
         # Sort by RRF score descending
-        sorted_results = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        sorted_results = sorted(
+            rrf_scores.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
         
         self.timing.rrf_fusion_ms = (time.perf_counter() - rrf_start) * 1000
         return sorted_results
@@ -553,17 +458,19 @@ class HybridRetriever:
         Args:
             original_code: The old/before code snippet
             changed_code: The new/after code snippet
-            patch: Direct patch text (alternative to original/changed)
             top_k: Final number of results to return
             dense_top_k: Number of candidates from dense search
             sparse_top_k: Number of candidates from sparse search
+            return_timing: If True, return timing stats along with results
             
         Returns:
             List of retrieved records with metadata and scores
+            If return_timing=True, returns tuple (results, timing_stats)
         """
         if self.dense_index is None:
             self.load_indexes()
         
+        # Start timing AFTER indexes are loaded (retrieval-only time)
         retrieval_start = time.perf_counter()
         
         # Create query
@@ -572,33 +479,10 @@ class HybridRetriever:
         else:
             query_text = self.create_query_text(original_code, changed_code)
         
-        # Perform dense and sparse search (parallel or sequential)
-        logger.debug("Performing hybrid retrieval...")
-        
-        if self.parallel_search:
-            # Parallel execution
-            parallel_start = time.perf_counter()
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                dense_future = executor.submit(self.dense_search, query_text, dense_top_k)
-                sparse_future = executor.submit(self.sparse_search, query_text, sparse_top_k)
-                
-                dense_results, embed_time, faiss_time, dense_total = dense_future.result()
-                sparse_results, tokenize_time, bm25_time, sparse_total = sparse_future.result()
-            
-            self.timing.parallel_search_ms = (time.perf_counter() - parallel_start) * 1000
-        else:
-            # Sequential execution
-            dense_results, embed_time, faiss_time, dense_total = self.dense_search(query_text, dense_top_k)
-            sparse_results, tokenize_time, bm25_time, sparse_total = self.sparse_search(query_text, sparse_top_k)
-            self.timing.parallel_search_ms = 0.0
-        
-        # Update timing stats
-        self.timing.query_embedding_ms = embed_time
-        self.timing.faiss_search_ms = faiss_time
-        self.timing.dense_search_total_ms = dense_total
-        self.timing.bm25_tokenize_ms = tokenize_time
-        self.timing.bm25_search_ms = bm25_time
-        self.timing.sparse_search_total_ms = sparse_total
+        # Perform dense and sparse search
+        logger.info("Performing hybrid retrieval...")
+        dense_results = self.dense_search(query_text, top_k=dense_top_k)
+        sparse_results = self.sparse_search(query_text, top_k=sparse_top_k)
         
         # Merge with RRF
         fused_results = self.reciprocal_rank_fusion(dense_results, sparse_results)
@@ -606,19 +490,21 @@ class HybridRetriever:
         # Get top-k final results
         final_results = fused_results[:top_k]
         
-        # Retrieve metadata from MongoDB
+        # Retrieve metadata from MongoDB (batch query)
         mongo_fetch_start = time.perf_counter()
         doc_ids = [doc_id for doc_id, _ in final_results]
         metadata_records = self.db_manager.get_by_ids(doc_ids)
         self.timing.mongodb_fetch_ms = (time.perf_counter() - mongo_fetch_start) * 1000
         
-        # Build final results
+        # Create result map for fast lookup
         metadata_map = {rec['_id']: rec for rec in metadata_records}
-        retrieved_records = []
         
+        # Build final results with scores
+        retrieved_records = []
         for doc_id, fused_score in final_results:
             if doc_id in metadata_map:
                 record = metadata_map[doc_id].copy()
+                # Remove MongoDB _id from result (use doc_id instead)
                 record.pop('_id', None)
                 record['doc_id'] = doc_id
                 record['retrieval_score'] = fused_score
@@ -627,8 +513,7 @@ class HybridRetriever:
                 logger.warning(f"Metadata not found for doc_id={doc_id}")
         
         self.timing.total_retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
-        logger.debug(f"Retrieved {len(retrieved_records)} records in {self.timing.total_retrieval_ms:.1f} ms")
-        
+        logger.info(f"Retrieved {len(retrieved_records)} records")
         return retrieved_records
     
     def get_timing_stats(self) -> TimingStats:
@@ -640,46 +525,62 @@ def main():
     """Test retrieval with sample query."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Test hybrid retrieval (optimized)")
-    parser.add_argument('--index-dir', type=str, default='data/indexes',
-                        help='Directory containing indexes')
-    parser.add_argument('--embedding-model', type=str, default='microsoft/codebert-base',
-                        help='Embedding model for queries')
-    
+    parser = argparse.ArgumentParser(description="Test hybrid retrieval")
+    parser.add_argument(
+        '--index-dir',
+        type=str,
+        default='data/indexes',
+        help='Directory containing indexes'
+    )
+    parser.add_argument(
+        '--embedding-model',
+        type=str,
+        default='microsoft/codebert-base',
+        help='Embedding model to encode queries (must match the one used for indexing)'
+    )
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--original-code', type=str, help='Original code snippet')
-    group.add_argument('--patch', type=str, help='Patch/diff text to query')
-    
-    parser.add_argument('--changed-code', type=str, help='Changed code (with --original-code)')
-    parser.add_argument('--top-k', type=int, default=5, help='Number of results')
-    parser.add_argument('--use-codebert-tokenizer', action='store_true',
-                        help='Use CodeBERT tokenizer for BM25')
-    parser.add_argument('--device', type=str, default=None,
-                        choices=['cpu', 'cuda', 'mps'],
-                        help='Device for embeddings (auto-detect if not set)')
-    parser.add_argument('--no-ivf', action='store_true',
-                        help='Disable IVF index (use brute-force)')
-    parser.add_argument('--nprobe', type=int, default=32,
-                        help='FAISS nprobe for IVF search')
-    parser.add_argument('--no-parallel', action='store_true',
-                        help='Disable parallel search')
-    parser.add_argument('--timing-json', action='store_true',
-                        help='Output timing as JSON')
-    parser.add_argument('--no-timing', action='store_true',
-                        help='Suppress timing output')
+    group.add_argument(
+        '--original-code',
+        type=str,
+        help='Original code snippet'
+    )
+    group.add_argument(
+        '--patch',
+        type=str,
+        help='Single patch/diff text to query with (code-only queries)'
+    )
+    parser.add_argument(
+        '--changed-code',
+        type=str,
+        help='Changed code snippet (required if --original-code is used)'
+    )
+    parser.add_argument(
+        '--top-k',
+        type=int,
+        default=5,
+        help='Number of results to retrieve'
+    )
+    parser.add_argument(
+        '--use-codebert-tokenizer',
+        action='store_true',
+        help='Use CodeBERT tokenizer for BM25 query tokenization to match index building'
+    )
+    parser.add_argument(
+        '--show-timing',
+        action='store_true',
+        default=True,
+        help='Display detailed timing statistics (default: True)'
+    )
+    parser.add_argument(
+        '--timing-json',
+        action='store_true',
+        help='Output timing stats as JSON for programmatic use'
+    )
     
     args = parser.parse_args()
     
     # Initialize retriever
-    retriever = HybridRetriever(
-        index_dir=args.index_dir,
-        embedding_model=args.embedding_model,
-        use_codebert_tokenizer=args.use_codebert_tokenizer,
-        device=args.device,
-        use_ivf_index=not args.no_ivf,
-        faiss_nprobe=args.nprobe,
-        parallel_search=not args.no_parallel
-    )
+    retriever = HybridRetriever(index_dir=args.index_dir, embedding_model=args.embedding_model, use_codebert_tokenizer=args.use_codebert_tokenizer)
     
     # Perform retrieval
     if args.patch:
@@ -703,10 +604,8 @@ def main():
         print(f"Source: {result.get('source_dataset', 'N/A')}")
         print(f"Language: {result.get('language', 'N/A')}")
         print(f"Quality Label: {result.get('quality_label', 'N/A')}")
-        patch_preview = (result.get('original_patch', 'N/A') or 'N/A')[:200]
-        review_preview = (result.get('review_comment', 'N/A') or 'N/A')[:200]
-        print(f"\nPatch:\n{patch_preview}...")
-        print(f"\nReview:\n{review_preview}...")
+        print(f"\nPatch:\n{result.get('original_patch', 'N/A')[:200]}...")
+        print(f"\nReview:\n{result.get('review_comment', 'N/A')[:200]}...")
         if result.get('refined_patch'):
             print(f"\nRefined Patch:\n{result['refined_patch'][:200]}...")
     
@@ -715,9 +614,10 @@ def main():
     # Show timing stats
     timing = retriever.get_timing_stats()
     if args.timing_json:
+        import json
         print("\n--- TIMING STATS (JSON) ---")
         print(json.dumps(timing.to_dict(), indent=2))
-    elif not args.no_timing:
+    elif args.show_timing:
         timing.print_summary()
 
 
