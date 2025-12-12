@@ -36,3 +36,4 @@ bert-score
 codebleu
 
 streamlit
+accelerate
