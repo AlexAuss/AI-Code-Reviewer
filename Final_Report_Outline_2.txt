@@ -30,7 +30,7 @@ Regarding prompting strategy: see the implementation of "src/utils/llm_model.py"
 • Prompting strategy, retrieval pipeline, evaluation workflow(talk about those very well from our implementation)
 
 • Hyperparameters, implementation details, and engineering decisions(see "src/evaluation/find_optimal_k") - we tune top k value and threshold limit see the implementation and for the evaluation result see the file "data/indexes/evaluation_results.jsonl".
-• Any constraints (API limits, computation time) - (Alex - API limits, I will give someinformation about it later) - keep this part empty and make a note so that I could include the information later here
+• Any constraints (API limits, computation time) - (We were running into Huggingface API call limits which forced us to run a smaller model locally.) - keep this part empty and make a note so that I could include the information later here
 
 This section should provide enough detail for reproducibility.
 
@@ -54,8 +54,8 @@ While generating latex keep placeholder for diagrams. we will generate based on 
 
 5. Short Reflection, Limitations & Future Work (0.5–1 page total)
 This section should be concise to emphasize methodology and results.
-• Reflection: Key lessons learned or meaningful changes since the midterm - (mention it here - challenges, what we faced during running evaluations - Alex), mention the optimization part of both indexing(meaningful changes like it was taking around 20 seconds genarting retrieved examples(top 3) after improving it we got retrieval examples within 2~3 seconds), 
-• Limitations: Dataset issues(mention issue - Alex), model weaknesses(we couldn't use the higher parameter model which has better capabilities due to our contrained resources), error patterns(Alex), evaluation constraints(Models is not doing better(Deepseek, Qwen - 0.5, 1.5, 3), we couldn't run pass@k for refined code as it taking too much time, we are getting negative results on BertScore(for review comment) which is not expected)
+• Reflection: Key lessons learned or meaningful changes since the midterm - (We ran into memory limitation issues while running the retrival and evaluation, which would cause the editor to crash), mention the optimization part of both indexing(meaningful changes like it was taking around 20 seconds genarting retrieved examples(top 3) after improving it we got retrieval examples within 2~3 seconds), 
+• Limitations: Dataset issues(In the comment generation datasets, we had to filter out around 5% of the total number of samples because the language that they belonged to could not be identified using code heuristics), error patterns(Out of Memory warnings that would cause my laptop to freeze and samples that would crash the function calls in codebleu), evaluation constraints(Models is not doing better(Deepseek, Qwen - 0.5, 1.5, 3), we couldn't run pass@k for refined code as it taking too much time, we are getting negative results on BertScore(for review comment) which is not expected)
 • Future Work: Realistic improvements or extensions(bertscore integration to see why it is getting negative, try with fine-tuning - tell RAG's limitation though we need more powerful GPU's to experiments with this)
 
 
