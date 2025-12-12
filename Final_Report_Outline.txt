@@ -58,6 +58,11 @@ This section should be concise to emphasize methodology and results.
 • Limitations: Dataset issues(In the comment generation datasets, we had to filter out around 5% of the total number of samples because the language that they belonged to could not be identified using code heuristics), error patterns(Out of Memory warnings that would cause my laptop to freeze and samples that would crash the function calls in codebleu), evaluation constraints(Models is not doing better(Deepseek, Qwen - 0.5, 1.5, 3), we couldn't run pass@k for refined code as it taking too much time, we are getting negative results on BertScore(for review comment) which is not expected)
 • Future Work: Realistic improvements or extensions(bertscore integration to see why it is getting negative, try with fine-tuning - tell RAG's limitation though we need more powerful GPU's to experiments with this)
 
+6. Contributions
+Alex worked on implementing Unified dataset creation, implementing multiple LLM base models, prompts and evaluation of both review comments and refined patch
+Dayamoy worked on the designing architecture, implementing dense and parse indexes, mongodb integration for metadata, optimization for indexing, Hybrid retriever with RRF, integrate whole evaluation pipeline from Alex's work
+Dylan worked on UI pipeline integration - with retriever(Dayamoy's work) and LLM integration(Alex's work), Dataset analysis, Data preprocessing
+All worked equally creating presentations and reports. Mention this as a result of great teamwork and also mention as Alex and Dayamoy are taking graduate courses they have worked on with architecture, Hybrid RAG and Evaluation parts(complex topics).
 
 Formatting Requirements
 • 6–8 pages, single-column layout

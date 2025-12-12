@@ -1,4 +1,23 @@
-Samples processed: 14
-Average ROUGE-L F1 Score: 0.0530
-Average BERTScore F1: -0.2708
-Average CodeBLEU: 0.0167
+Deepseek 1.3B:
+
+Samples processed: 67
+Average ROUGE-L F1 Score: 0.0656
+Average CodeBLEU: 0.2296
+
+Qwen 0.6B:
+
+Samples processed: 67
+Average ROUGE-L F1 Score: 0.0909
+Average CodeBLEU: 0.3000
+
+Qwen 1.5B:
+
+Samples processed: 67
+Average ROUGE-L F1 Score: 0.0911
+Average CodeBLEU: 0.3260
+
+Qwen 3B:
+
+Samples processed: 67
+Average ROUGE-L F1 Score: 0.0964
+Average CodeBLEU: 0.3335

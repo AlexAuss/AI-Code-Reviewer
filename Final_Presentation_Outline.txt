@@ -1,0 +1,71 @@
+Overview
+The synchronized presentation is a concise oral summary of the Final Project Report. The pre-
+sentation should clearly communicate the problem, methodology, and final results within a 10–12
+minute time window.
+Presentation Guideline
+Slide 1: Title & Team (30 seconds)
+The opening slide should include:
+• Project title
+• Team member names
+• A single concise sentence describing the problem or task
+Slides 2–3: Introduction & Problem Definition (1.5–2 minutes)
+This section motivates the project and sets the context. Cover the following:
+• The research question or task being addressed
+• Motivation and real-world relevance of the problem
+• Connections to course topics, such as:
+– Prompt engineering
+– Retrieval-Augmented Generation (RAG)
+– Fine-tuning
+– Evaluation methodologies
+Guideline: Keep this section high-level and conceptual. Avoid implementation details.
+1
+Slide 4: Dataset (1–1.5 minutes)
+Describe the dataset actually used in the final implementation:
+• Dataset source(s)
+• Dataset size and structure
+• Key preprocessing or filtering steps
+• Ethical considerations, including bias, privacy, and licensing (if applicable)
+Slides 5–6: Methods / System Design (3–4 minutes)
+This is one of the most important sections of the presentation. Include:
+• An overall system or architecture diagram
+• Description of major system components:
+– Prompting strategy
+– Retrieval pipeline (if applicable)
+– Fine-tuning or agent-based design (if applicable)
+– Evaluation workflow
+• Models used and the rationale for choosing them
+• Engineering constraints and design considerations:
+– API or rate limits
+– Computational resources
+– Latency or cost constraints
+Slides 7–8: Final Results (3–4 minutes)
+This is the most important part of the presentation.
+Include only final, complete results:
+• Quantitative results, such as:
+– Accuracy, F1 score
+– BLEU / ROUGE
+– Win-rate
+2
+– Latency or cost
+– Human evaluation scores
+• Qualitative analysis:
+– Example outputs
+– Side-by-side comparisons
+– Representative error or failure cases
+• Comparative analysis:
+– Baselines
+– Alternative prompts
+– With vs. without RAG
+– Fine-tuned vs. non–fine-tuned models
+• Interpretation of observed behaviors and performance trends
+Slide 9: Reflection, Limitations & Future Work (1–1.5 minutes)
+This concluding section should be concise.
+• Reflection:
+– Key lessons learned
+– Major changes since the midterm
+• Limitations:
+– Dataset limitations
+– Model weaknesses
+– Evaluation constraints
+• Future work:
+– Realistic and technically grounded extensions or improvements
