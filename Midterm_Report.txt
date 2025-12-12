@@ -1,0 +1,43 @@
+Code Reviewer Project Group
+
+Members: 
+Alex Aussawalaithong, Dayamoy Datta Saikat, Dylan Liss 
+
+1. Project Overview
+
+Our Code Reviewer project investigates the research question: Can a hybrid retrieval-augmented sequence-to-sequence model generate an accurate and actionable code review that meets benchmarks and human evaluation standards, while reducing reviewer effort and time? Unfortunately, code review is a slow, intensive process in terms of developer time, which leads to delayed delivery when changes sit in review queues. Our tool aims to address this bottleneck by automatically generating concise, structured summaries of code changes that can be actionable for developers before sending them to the review team. By relying on a hybrid Retrieval Augmented Generation pipeline, the system grounds its output in actual code modifications and surrounding context. This design aligns directly with course topics, including RAG architectures, embedding and prompting techniques, and evaluation metrics such as ROUGE and BERTScore. Together, these positions the project within the course's broader focus on generative AI, a hybrid retrieval-generation system.
+
+Dataset
+
+The dataset for our project was acquired from Microsoft’s Code Reviewer. The data was hosted on Zenodo and split up into three different datasets: Diff_Quality_Estimation, Comment_Generation, and Code_Refinement. They used the Diff_Quality_Estimation dataset, which contains input with “old_file” and “diff_hunk”, to predict whether the code change is not good and needs a comment. Comment Generation was used to generate a comment for a change specified in diff_hunk. Lastly, the Code Refinement dataset contains the changed code given the original old file, diff hunk, and the review comments. For our purposes, we plan on using only the Code Refinement and Comment Generation datasets because the Quality Estimation dataset contains unnecessary columns. Given the two remaining datasets, we will merge them into one unified dataset by merging the samples and inferring information from missing data values for certain columns. Specifically, if the sample comes from Code Refinement, it receives a quality label of 0. On the other hand, the programming language for the samples in Code Generation is inferred using programming language heuristics.
+
+2. Methodology
+
+The system constructs two complementary indexing for efficient retrieval of relevant review samples. A dense vector index is built using FAISS, where code diffs and comments are encoded through the CodeBERT embedding model to enable semantic similarity search. In parallel, a sparse index is created using BM25 with the CodeBERT tokenizer, supporting keyword-based retrieval optimized for code tokens.
+To handle large-scale data efficiently, streaming and chunking techniques are applied during indexing. Since in-memory storage of metadata is impractical, a persistent external store such as MongoDB is proposed for scalable metadata management. 
+
+
+Figure: Hybrid-RAG pipeline for Code Review generation
+
+When a user submits a new code change, it is preprocessed to extract the diff and identify the programming language.
+
+Two retrieval modules operate in parallel:
+Dense Retriever: computes cosine similarity between the query embedding (from CodeBERT) and dense index vectors.
+Sparse Retriever: computes BM25 scores using tokenized query terms.
+A Reciprocal Rank Fusion step merges both results to balance semantic and lexical relevance. Then, a smart filtering stage prioritizes examples matching the user’s language and relevance thresholds. The system dynamically selects the Top-K results, where K is tuned on the validation dataset using the Recall@K and Mean Average Precision (MAP@K) metrics.
+
+The final phase converts the retrieved examples into a structured input for the LLM. A Prompt Builder composes a system instruction that will act as a Code Reviewer, includes some good and some bad retrieved examples, and embeds the user’s code change (before + after). Clear formatting instructions guide the model first to provide a quality review and then, if needed, generate a refined version of the code.
+
+The constructed prompt is processed by a fine-tuned large language model such as Qwen or DeepSeek, selected for its effectiveness in generating high-quality code reviews. The model produces a structured response containing a quality assessment, identified issues, review comments, and a refined code snippet. 
+
+Preliminary Results 
+
+In our UI, the user enters their “before” code (mark review lines with -) and “after” code (mark review lines with +) in the first two editors. A comparison is generated, and a focused diff of the two code chunks is provided for feedback. With regards to phase I, the unified dataset has been completely created by merging the Code Generation and Code Refinement dataset. The programming language of roughly 95% of the samples from Code Refinement were able to be inferred using the heuristic approach. The final combined dataset contains around 268k samples with the following fields: original file, original patch, refined_patch, review_comment, quality_label, and source_dataset. In phase II, the dense vector index using FAISS indexing has been created. The sparse index was also created using the BM25 algorithm. 
+
+3. Next Steps 
+
+Our next steps focus on completing the full retrieval, prompt-building, and LLM-generation pipeline so the system can automatically produce review comments and, when appropriate, refined versions of the user's code changes. Although we initially planned to use the Gemini API, we will now use Qwen or DeepSeek models, which are better suited to our structured reasoning and hybrid RAG workflows. 
+
+Our evaluation strategy will assess the two main components of the system separately: review comment summarization and refined code-change feedback. For the natural-language review comments, we will use ROUGE-L to measure longest-sequence overlap and BERTScore to capture semantic similarity through contextual embeddings. For refined code suggestions, we will use Pass@k to evaluate how consistently the model produces stable refinements aligned with the reference improvements and CodeBLEU to measure syntactic, structural, and semantic similarity to human-generated changes. These metrics allow us to rigorously validate each part of the system using methods tailored to natural-language feedback and code-focused evaluation.
+
+

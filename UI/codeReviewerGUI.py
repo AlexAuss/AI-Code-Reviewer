@@ -9,6 +9,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.indexing.hybrid_retriever import HybridRetriever
+from src.utils.llm_model import load_deepseek_model, build_review_prompt, generate_deepseek_response, extract_review_and_code
 
 # Page config
 st.set_page_config(page_title="Generative AI Code Reviewer", layout="wide")
@@ -218,7 +219,17 @@ def load_retriever():
         retriever.load_indexes()
         return retriever
 
-# Load retriever at startup (before UI)
+@st.cache_resource
+def load_llm():
+    """
+    Load DeepSeek LLM model. Runs once at startup and cached.
+    This loads the DeepSeek model for generating code reviews.
+    """
+    with st.spinner("🤖 Loading DeepSeek LLM (first time only, ~1 minute)..."):
+        tokenizer, generator = load_deepseek_model()
+        return tokenizer, generator
+
+# Load retriever and LLM at startup (before UI)
 try:
     retriever = load_retriever()
     st.success(f"✅ Retriever ready with {retriever.dense_index.ntotal} vectors")
@@ -226,6 +237,13 @@ except Exception as e:
     st.error(f"❌ Failed to load retriever: {e}")
     st.info("Make sure:\n1. Indexes exist in data/indexes/\n2. MongoDB is running: `brew services start mongodb-community`")
     retriever = None
+
+try:
+    tokenizer, generator = load_llm()
+    st.success("✅ DeepSeek LLM ready for code review generation")
+except Exception as e:
+    st.error(f"❌ Failed to load LLM: {e}")
+    tokenizer, generator = None, None
 
 # -------------------------------------------------------------
 # RETRIEVAL FUNCTION (REPLACES MOCK API)
@@ -238,10 +256,10 @@ def perform_retrieval(patch_text: str):
     if retriever is None:
         raise Exception("Retriever not loaded")
     
-    # Retrieve similar examples (K=5, threshold=0.6)
+    # Retrieve similar examples (K=3, threshold=0.6)
     retrieved_examples = retriever.retrieve(
         patch=patch_text,
-        top_k=5,
+        top_k=3,  # Using 3 examples for LLM prompt
         apply_similarity_threshold=True
     )
     
@@ -249,6 +267,31 @@ def perform_retrieval(patch_text: str):
     timing = retriever.get_timing_stats()
     
     return retrieved_examples, timing
+
+def generate_llm_review(patch_text: str, retrieved_examples: list):
+    """
+    Generate AI code review using DeepSeek LLM.
+    
+    Args:
+        patch_text: The code patch to review
+        retrieved_examples: Retrieved examples from hybrid retriever
+        
+    Returns:
+        tuple: (review_comment, refined_code, raw_response)
+    """
+    if tokenizer is None or generator is None:
+        raise Exception("LLM not loaded")
+    
+    # Build prompt from retrieved examples
+    prompt = build_review_prompt(retrieved_examples, patch_text)
+    
+    # Generate response
+    raw_response = generate_deepseek_response(prompt, tokenizer, generator, max_tokens=500)
+    
+    # Extract review and refined code
+    review_comment, refined_code = extract_review_and_code(raw_response)
+    
+    return review_comment, refined_code, raw_response
 
 # -------------------------------------------------------------
 # UI LAYOUT
@@ -272,16 +315,20 @@ if "diff_html" not in st.session_state:
     st.session_state.diff_html = None
 
 # -------------------------------------------------------------
-# MAIN LOGIC - RETRIEVAL PIPELINE
+# MAIN LOGIC - RETRIEVAL & LLM PIPELINE
 # -------------------------------------------------------------
 if clicked:
     if retriever is None:
         st.error("❌ Retriever not loaded. Cannot perform review.")
+    elif tokenizer is None or generator is None:
+        st.error("❌ LLM not loaded. Cannot generate review.")
     else:
         # 1. Clear previous results
         st.session_state.diff_html = None
         st.session_state.retrieved_examples = None
         st.session_state.retrieval_time = None
+        st.session_state.llm_review = None
+        st.session_state.llm_refined_code = None
         
         # 2. Analyze code changes
         with st.spinner("📝 Analyzing code changes..."):
@@ -320,13 +367,25 @@ if clicked:
                     import traceback
                     st.code(traceback.format_exc())
             
-            # TODO: Step 4 - LLM Generation (Your teammate will implement)
-            # Once LLM is ready, add this:
-            # 
-            # with st.spinner("🤖 Generating AI review (~3-5 seconds)..."):
-            #     formatted_examples = retriever.format_for_llm_prompt(retrieved_examples)
-            #     llm_review = generate_review_with_llm(patch_text, formatted_examples)
-            #     st.session_state.llm_review = llm_review
+            # 4. Generate LLM Review
+            if st.session_state.get('retrieved_examples'):
+                with st.spinner("🤖 Generating AI code review (~3-5 seconds)..."):
+                    try:
+                        review_comment, refined_code, raw_response = generate_llm_review(
+                            patch_text, 
+                            st.session_state['retrieved_examples']
+                        )
+                        
+                        st.session_state['llm_review'] = review_comment
+                        st.session_state['llm_refined_code'] = refined_code
+                        st.session_state['llm_raw_response'] = raw_response
+                        
+                        st.success("✅ AI review generated successfully!")
+                        
+                    except Exception as e:
+                        st.error(f"❌ LLM generation error: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
 
 st.subheader("Comparison & Feedback")
 
@@ -344,7 +403,7 @@ else:
         
         examples = st.session_state['retrieved_examples']
         timing = st.session_state.get('retrieval_time', 0)
-        st.caption(f"Found {len(examples)} relevant examples in {timing:.2f}s (K=5, threshold=0.6)")
+        st.caption(f"Found {len(examples)} relevant examples in {timing:.2f}s (K=3, threshold=0.6)")
         
         for i, example in enumerate(examples, 1):
             # Prepare display info
@@ -386,20 +445,25 @@ else:
                     quality = example.get('quality_label', 'N/A')
                     st.caption(f"⭐ Quality: {quality}")
         
-        # TODO: Show LLM-generated review (Your teammate will implement)
+        # Show LLM-generated review
         st.markdown("---")
-        st.markdown("### 🤖 AI-Generated Review")
-        st.info("""
-        **TODO: LLM Integration Pending**
+        st.markdown("### 🤖 AI-Generated Code Review")
         
-        Once your teammate implements LLM integration, the AI-generated review will appear here.
-        It will synthesize insights from the retrieved examples above.
-        
-        Implementation needed:
-        1. Format examples using `retriever.format_for_llm_prompt(retrieved_examples)`
-        2. Call LLM with formatted prompt + user's patch
-        3. Display generated review here
-        """)
+        if st.session_state.get('llm_review'):
+            # Display the review comment
+            st.markdown("**Review Comment:**")
+            st.info(st.session_state['llm_review'])
+            
+            # Display refined code if available
+            if st.session_state.get('llm_refined_code'):
+                st.markdown("**Refined/Fixed Code:**")
+                st.code(st.session_state['llm_refined_code'], language='diff')
+            
+            # Optional: Show raw response
+            with st.expander("🔍 Show Raw LLM Response"):
+                st.text(st.session_state.get('llm_raw_response', 'N/A'))
+        else:
+            st.warning("⚠️ No AI review generated yet. Click 'Review my Code' button to generate.")
         
         # Optional: Show performance stats
         with st.expander("🔧 Show Retrieval Performance Stats"):

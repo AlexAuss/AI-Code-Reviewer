@@ -1,0 +1,65 @@
+
+Overview
+The Final Project Report (6–8 pages) is the polished, complete version of your semester project.
+You may reuse material from your Midterm Report, but you must revise and correct any
+content that was inaccurate, incomplete, or outdated. If you reuse midterm content without fixing
+errors, you may lose points in the corresponding sections.
+Required Sections (6–8 pages)
+
+1. Introduction & Problem Definition (0.5–1 page)
+Describe:
+• Your research question or task
+• Motivation and real-world relevance
+• Connections to course topics (prompting, RAG, evaluation, etc.)
+Ensure this reflects the final scope and direction of your project.
+
+2. Dataset (0.5–1 page)
+Provide a clear description of:
+• Dataset sources, size, structure, and characteristics
+• Preprocessing and filtering steps
+• Ethical considerations (bias, privacy, licensing)
+Update this section to match the dataset actually used in your final implementation.
+For the overview, you will get the idea from the "Midterm_report.txt" file. For the preprocessing and filtering step, you could see our implementation from "src/utils/Data_Merger_Module.py". Also write something about the biasness of the dataset if possible. Here is the link of the source of our dataset: "https://zenodo.org/records/6900648". You can link this as well as the footernote in the latex. 
+
+3. Methodology (2–2.5 pages)
+This is one of the core sections of the report. Include:
+• System or architecture diagrams(I have diagram which I have given you as attachment)
+Review all of the code to see the updated implementations from "src/utils/Data_Merger_Module.py"(Unified Dataset Generation) -> "src/indexing/build_indexes.py"(Indexes) + "src/indexing/build_bm25s_index.py + convert_faiss_ivf.py" (Optimized indexes for fast retrieval, this is one optimization we have done after midterm) + "src/indexing/setup_mongodb.py + db_config.py"(for metadata store in mongodb) -> "src/indexing/hybrid_retirever.py"(Dense + Sparse Retriever + RRF fusion) -> "src/indexing/evaluation_deepseek.py + evaluation_qwen.py" (For LLM generation and evaluation pipeline)(we want ignored BertScore as it didn't get good results, but don't include anything about BertScore in that section, just include ROUGE-L F1 - for review comment and CodeBleu Score - for refined code)
+Regarding prompting strategy: see the implementation of "src/utils/llm_model.py"(talk how explicitly mentioning model about '+' and '-' let us get good results as model could understand our motive to get the review of code changes not the code actually)
+
+• Prompting strategy, retrieval pipeline, evaluation workflow(talk about those very well from our implementation)
+
+• Hyperparameters, implementation details, and engineering decisions(see "src/evaluation/find_optimal_k") - we tune top k value and threshold limit see the implementation and for the evaluation result see the file "data/indexes/evaluation_results.jsonl".
+• Any constraints (API limits, computation time) - (I will give someinformation about it later) - keep this part empty and make a note so that I could include the information later here
+
+This section should provide enough detail for reproducibility.
+
+
+4. Final Results (2–2.5 pages)
+This is the most important section of the report. Replace any midterm preliminary results with
+final, complete results.
+
+
+For the final results 
+• Quantitative results: e.g., accuracy, BLEU/ROUGE, F1, latency, cost, win-rate, human
+evaluation, etc.
+• Qualitative examples: e.g., model outputs, comparisons, and error cases
+• Comparisons: e.g., baselines, alternative prompts, RAG variants, fine-tuned vs. non–fine-
+tuned
+• Interpretation: explain observed patterns and system behavior
+Use tables, plots, and figures where appropriate.
+
+
+5. Short Reflection, Limitations & Future Work (0.5–1 page total)
+This section should be concise to emphasize methodology and results.
+• Reflection: Key lessons learned or meaningful changes since the midterm
+• Limitations: Dataset issues, model weaknesses, error patterns, evaluation constraints
+• Future Work: Realistic improvements or extensions
+
+
+Formatting Requirements
+• 6–8 pages, single-column layout
+• 11 pt font, 1-inch margins
+• Figures and tables strongly encouraged
+• Submit as a PDF to Canvas
+• Include title of the project and team member names on page 1

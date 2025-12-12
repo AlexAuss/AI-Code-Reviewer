@@ -721,7 +721,7 @@ class HybridRetriever:
         return '\n\n' + '\n\n'.join(formatted) + '\n'
     
     def retrieve_and_format(self, patch: str = None, original_code: str = None, 
-                           changed_code: str = None, top_k: int = 5) -> Tuple[List[Dict], str]:
+                           changed_code: str = None, top_k: int = 3) -> Tuple[List[Dict], str]:
         """
         Convenience method: retrieve examples and format for LLM in one call.
         
@@ -740,6 +740,7 @@ class HybridRetriever:
             changed_code=changed_code,
             top_k=top_k
         )
+        
         formatted = self.format_for_llm_prompt(results)
         return results, formatted
 
