@@ -35,205 +35,150 @@ textarea, .stTextArea textarea {
         unsafe_allow_html=True,
 )
 
-# Default multi-block content: users can paste multiple marked code blocks here.
-default_before = """
-# === Example 1: JavaScript (missing semicolon & formatting) ===
-function incrementCounter() {
-    // initialization
--    let count = 1
-    for (let i = 0; i < 10; i++) {
-        count += i
-    }
-    console.log(count)
-}
-
-# === Example 2: Python (None handling missing) ===
-def process(item):
-    # previously assumed item always present
--    return item.value
-
-# === Example 3: Rename variable inside computation ===
-def compute_all(values):
-    # accumulate and report
--    total = compute_sum(values)
-    logger.info("complete")
-
-# === Example 4: Add type annotations (before) ===
-def add(a, b):
--    return a + b
-
-# === Example 5: Boolean correctness (before) ===
-def is_valid(x):
--    return x
-
+# Default example: users can paste their own code or edit this example
+default_before = """bool TransformationAddGlobalVariable::IsApplicable(
+   if (!pointer_type) {
+     return false;
+   }
+  // ... with Private storage class.
+  if (pointer_type->storage_class() != SpvStorageClassPrivate) {
+     return false;
+   }
+  // The initializer id must be the id of a constant.  Check this with the
+  // constant manager.
+  auto constant_id = ir_context->get_constant_mgr()->GetConstantsFromIds(
+      {message_.initializer_id()});
+  if (constant_id.empty()) {
+    return false;
+  }
+  assert(constant_id.size() == 1 &&
+         "We asked for the constant associated with a single id; we should "
+         "get a single constant.");
+  // The type of the constant must match the pointee type of the pointer.
+  if (pointer_type->pointee_type() != constant_id[0]->type()) {
+    return false;
+  }
 """
 
-default_after = """
-# === Example 1: JavaScript (fixed semicolon & clean spacing) ===
-function incrementCounter() {
-    // initialization
-+    let count = 1;
-    for (let i = 0; i < 10; i++) {
-        count += i;
+default_after = """bool TransformationAddGlobalVariable::IsApplicable(
+   if (!pointer_type) {
+     return false;
+   }
+  // ... with the right storage class.
+  if (pointer_type->storage_class() != storage_class) {
+     return false;
+   }
+  if (message_.initializer_id()) {
+    // An initializer is not allowed if the storage class is Workgroup.
+    if (storage_class == SpvStorageClassWorkgroup) {
+      return false;
     }
-    console.log(count)
-}
-
-# === Example 2: Python (guard against None) ===
-def process(item):
-    # safely handle missing item
-+    if item is None:
-+        return None
-+    return item.value
-
-# === Example 3: Rename variable inside computation ===
-def compute_all(values):
-    # accumulate and report
-+    sum_total = compute_sum(values)
-    logger.info("complete")
-
-# === Example 4: Add type annotations (after) ===
-def add(a: int, b: int) -> int:
-+    return a + b
-
-# === Example 5: Boolean correctness (after) ===
-def is_valid(x):
-+    return bool(x)
-
 """
 
 
-# Strict parsing of marked lines
-def _parse_marked(text: str, marker: str):
-    out = []
-    for raw in text.splitlines():
-        s = raw.lstrip()
-        if s.startswith(marker):
-            content = s[1:]
-            if content.startswith(" "):
-                content = content[1:]
-            out.append(content)
-    return out
+# Diff-based line comparison
+def get_diff_operations(before_src: str, after_src: str):
+    """Get diff operations (insert, delete, replace, equal) with proper handling.
+    
+    Returns list of tuples: (tag, i1, i2, j1, j2)
+    - tag: 'replace', 'delete', 'insert', or 'equal'
+    - i1, i2: range in before text
+    - j1, j2: range in after text
+    """
+    import difflib
+    
+    before_lines = before_src.splitlines()
+    after_lines = after_src.splitlines()
+    
+    matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
+    return matcher.get_opcodes()
 
 def get_comparison_results(before_src: str, after_src: str):
-    befores = _parse_marked(before_src, "-")
-    afters  = _parse_marked(after_src, "+")
+    """Compare before and after code, automatically detecting changed lines using opcodes."""
+    before_lines = before_src.splitlines()
+    after_lines = after_src.splitlines()
+    opcodes = get_diff_operations(before_src, after_src)
+    
     results = []
-    max_len = max(len(befores), len(afters))
-    for i in range(max_len):
-        old_line = befores[i] if i < len(befores) else None
-        new_line = afters[i]  if i < len(afters)  else None
-        entry = {"old": old_line, "new": new_line, "type": "none", "feedback": ""}
-        if old_line is not None and new_line is not None:
-            if old_line.rstrip() + ";" == new_line.rstrip():
-                entry["type"] = "semicolon"
-                entry["feedback"] = "Added missing semicolon."
-            elif old_line.rstrip() == new_line.rstrip():
-                entry["type"] = "no_change"
-                entry["feedback"] = "No effective change in this pair."
-            else:
-                entry["type"] = "edit"
-                entry["feedback"] = "Edited line."
-        elif old_line is not None:
-            entry["type"] = "remove"
-            entry["feedback"] = "Removed line."
-        elif new_line is not None:
-            entry["type"] = "add"
-            entry["feedback"] = "Added line."
-        results.append(entry)
+    
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == 'delete':
+            # Deleted lines
+            for line in before_lines[i1:i2]:
+                entry = {"old": line, "new": None, "type": "javascript", "feedback": "Removed line."}
+                results.append(entry)
+        elif tag == 'insert':
+            # Inserted lines
+            for line in after_lines[j1:j2]:
+                entry = {"old": None, "new": line, "type": "javascript", "feedback": "Added line."}
+                results.append(entry)
+        elif tag == 'replace':
+            # Replaced lines - show deletions first, then additions
+            for line in before_lines[i1:i2]:
+                entry = {"old": line, "new": None, "type": "javascript", "feedback": "Removed line."}
+                results.append(entry)
+            for line in after_lines[j1:j2]:
+                entry = {"old": None, "new": line, "type": "javascript", "feedback": "Added line."}
+                results.append(entry)
+    
     return results
 
 def render_comparison_html(diff_data, before_text: str = None, after_text: str = None):
-    """Render comparison HTML including a nearby context line from the
-    original Before/After text blocks.
-
-    For each marked pair we attempt to show the previous non-marked line
-    from the corresponding Before/After block as context.
+    """Render comparison HTML with full code diff and feedback at the end.
+    
+    Uses difflib opcodes to properly handle variable-length change blocks.
     """
-    if not diff_data:
-        return "<div class='viewer'><span class='feedback'>No marked lines to review.</span></div>"
+    if not diff_data or not before_text or not after_text:
+        return "<div class='viewer'><span class='feedback'>No changes detected.</span></div>"
 
-    def _collect_context_blocks(text: str, marker: str, k: int = 2):
-        """Collect up to `k` non-marked context lines before and after each marked
-        line in `text`. Returns a list aligned with the marked lines order where
-        each element is a dict: {'pre': [...], 'post': [...]}.
-        """
-        if not text:
-            return []
-        lines = text.splitlines()
-        blocks = []
-        for idx, line in enumerate(lines):
-            s = line.lstrip()
-            if s.startswith(marker):
-                # collect previous k non-marked lines
-                pre = []
-                for j in range(idx - 1, -1, -1):
-                    prev = lines[j]
-                    ps = prev.lstrip()
-                    if ps.startswith('-') or ps.startswith('+'):
-                        continue
-                    if ps.strip() == '':
-                        continue
-                    pre.append(ps)
-                    if len(pre) >= k:
-                        break
-                pre.reverse()
-
-                # collect next k non-marked lines
-                post = []
-                for j in range(idx + 1, len(lines)):
-                    nxt = lines[j]
-                    ns = nxt.lstrip()
-                    if ns.startswith('-') or ns.startswith('+'):
-                        continue
-                    if ns.strip() == '':
-                        continue
-                    post.append(ns)
-                    if len(post) >= k:
-                        break
-
-                blocks.append({'pre': pre, 'post': post})
-        return blocks
-
-    # number of context lines to show before/after
-    K = 2
-    before_blocks = _collect_context_blocks(before_text or '', '-', K)
-    after_blocks = _collect_context_blocks(after_text or '', '+', K)
-
-    html = ["<div class='viewer'>Reviewing marked lines with nearby context:\n\n"]
-    for i, item in enumerate(diff_data):
-        old_line = item.get('old')
-        new_line = item.get('new')
-        kind = item.get('type')
-        fb = item.get('feedback')
-
-        # show pre-context from before_blocks if present
-        if i < len(before_blocks):
-            for ctx_line in before_blocks[i]['pre']:
-                html.append(f"<div class='context'> {ctx_line}</div>\n")
-
-        if old_line is not None:
-            html.append(f"<span class='diff_del'>- {old_line}</span>\n")
-
-        if new_line is not None:
-            if kind == 'semicolon':
-                prefix = new_line.rstrip(';')
-                html.append(f"<span class='diff_add'>+ {prefix}<span class='fix_semicolon'>;</span></span>\n")
-            else:
-                html.append(f"<span class='diff_add'>+ {new_line}</span>\n")
-
-        # show post-context from after_blocks if present
-        if i < len(after_blocks):
-            for ctx_line in after_blocks[i]['post']:
-                html.append(f"<div class='context'> {ctx_line}</div>\n")
-
-        if fb:
-            html.append(f"<span class='feedback'>{fb}</span>\n")
-
-        html.append('\n')
-
-    html.append('</div>')
+    before_lines = before_text.splitlines()
+    after_lines = after_text.splitlines()
+    opcodes = get_diff_operations(before_text, after_text)
+    
+    html = ["<div class='viewer'>"]
+    
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == 'equal':
+            # Context lines - show all unchanged lines
+            for line in before_lines[i1:i2]:
+                html.append(f" {line}\n")
+        elif tag == 'delete':
+            # Deletions - show all deleted lines
+            for line in before_lines[i1:i2]:
+                html.append(f"<span class='diff_del'>-{line}</span>\n")
+        elif tag == 'insert':
+            # Insertions - show all added lines
+            for line in after_lines[j1:j2]:
+                html.append(f"<span class='diff_add'>+{line}</span>\n")
+        elif tag == 'replace':
+            # Replacements - show all deletions first, then all additions
+            for line in before_lines[i1:i2]:
+                html.append(f"<span class='diff_del'>-{line}</span>\n")
+            for line in after_lines[j1:j2]:
+                html.append(f"<span class='diff_add'>+{line}</span>\n")
+    
+    # Add feedback section at the end (collect unique feedback)
+    if diff_data:
+        unique_feedback = []
+        seen_feedback = set()
+        for item in diff_data:
+            fb = item.get('feedback')
+            if fb and fb not in seen_feedback:
+                unique_feedback.append(fb)
+                seen_feedback.add(fb)
+        
+        if unique_feedback:
+            html.append("\n<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #30363d;'>\n")
+            for fb in unique_feedback:
+                html.append(f"<span class='feedback'>• {fb}</span><br>\n")
+            html.append("</div>\n")
+    
+    html.append("</div>")
     return ''.join(html)
+
+
+
+
 
 
 def serialize_diff_to_patch(diff_data) -> str:
@@ -254,6 +199,116 @@ def serialize_diff_to_patch(diff_data) -> str:
         if new is not None:
             lines.append(f"+{new}")
     return "\n".join(lines)
+
+
+def build_patch_from_texts(before_text: str, after_text: str, context_lines: int = 3) -> str:
+    """Build a patch from before/after textareas with surrounding context.
+
+    Strategy:
+    1. Extract marked lines (- and +) from before/after.
+    2. For each marked line, include K surrounding context lines.
+    3. Output the hunks in order with minimal duplication.
+    """
+    b_lines = before_text.splitlines()
+    a_lines = after_text.splitlines()
+
+    # Find all marked line indices
+    b_marked_indices = set()
+    a_marked_indices = set()
+    
+    for idx, line in enumerate(b_lines):
+        if line.lstrip().startswith('-'):
+            b_marked_indices.add(idx)
+    
+    for idx, line in enumerate(a_lines):
+        if line.lstrip().startswith('+'):
+            a_marked_indices.add(idx)
+
+    if not b_marked_indices and not a_marked_indices:
+        # No marked lines; return empty or full text (choose based on preference)
+        return ""
+
+    # Collect all line indices to include (marked + context)
+    included_b = set()
+    included_a = set()
+
+    # For each marked line in before, include it plus context
+    for idx in b_marked_indices:
+        for j in range(max(0, idx - context_lines), min(len(b_lines), idx + context_lines + 1)):
+            included_b.add(j)
+
+    # For each marked line in after, include it plus context
+    for idx in a_marked_indices:
+        for j in range(max(0, idx - context_lines), min(len(a_lines), idx + context_lines + 1)):
+            included_a.add(j)
+
+    out = []
+    last_output_idx = -10  # Track last output index to avoid duplication
+
+    # Iterate through before text and output included lines
+    for idx in sorted(included_b):
+        line = b_lines[idx]
+        s = line.lstrip()
+        
+        if s.startswith('-'):
+            # Marked removal line
+            content = s[1:].lstrip() if s[1:].startswith(' ') else s[1:]
+            out.append('-' + content)
+        else:
+            # Context line from before
+            out.append(line)
+        
+        last_output_idx = idx
+
+    # Iterate through after text and output marked added lines (with minimal context duplication)
+    for idx in sorted(included_a):
+        line = a_lines[idx]
+        s = line.lstrip()
+        
+        if s.startswith('+'):
+            # Marked addition line
+            content = s[1:].lstrip() if s[1:].startswith(' ') else s[1:]
+            out.append('+' + content)
+
+    return "\n".join(out)
+
+
+def format_patch_as_display(diff_data, before_text: str = None, after_text: str = None) -> str:
+    """Format the patch as a unified diff showing all lines with proper alignment.
+    
+    Uses difflib opcodes to properly handle variable-length change blocks.
+    Groups consecutive deletions before additions in replace blocks.
+    """
+    if not diff_data or not before_text or not after_text:
+        return ""
+
+    before_lines = before_text.splitlines()
+    after_lines = after_text.splitlines()
+    opcodes = get_diff_operations(before_text, after_text)
+    
+    out = []
+    
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == 'equal':
+            # Context lines - show all unchanged lines
+            for line in before_lines[i1:i2]:
+                out.append(f" {line}")
+        elif tag == 'delete':
+            # Deletions - show all deleted lines
+            for line in before_lines[i1:i2]:
+                out.append(f"-{line}")
+        elif tag == 'insert':
+            # Insertions - show all added lines
+            for line in after_lines[j1:j2]:
+                out.append(f"+{line}")
+        elif tag == 'replace':
+            # Replacements - show all deletions first, then all additions
+            for line in before_lines[i1:i2]:
+                out.append(f"-{line}")
+            for line in after_lines[j1:j2]:
+                out.append(f"+{line}")
+    
+    return "\n".join(out)
 
 # No dropdown: users can paste multiple marked blocks directly into the textareas.
 
@@ -284,15 +339,78 @@ if clicked:
     diff_data = get_comparison_results(before_text, after_text)
     st.session_state.diff_html = render_comparison_html(diff_data, before_text=before_text, after_text=after_text)
 
-    # Serialize the marked before/after into a patch string suitable for
-    # storing as `original_patch` in the dataset. Keep it in session state
-    # so other parts of the app or export scripts can pick it up.
-    patch_text = serialize_diff_to_patch(diff_data)
-    st.session_state['original_patch'] = patch_text
+    # Store raw diff_data for debugging / inspection
+    st.session_state['last_diff_data'] = diff_data
+
+    # Serialize the marked before/after into a patch string formatted as it appears
+    # in the Comparison & Feedback display (context lines + diff markers + feedback).
+    # This is stored as `original_patch` in the dataset.
+    display_patch = format_patch_as_display(diff_data, before_text=before_text, after_text=after_text)
+    st.session_state['original_patch'] = display_patch
 
 st.subheader("Comparison & Feedback")
 if st.session_state.diff_html is None:
     st.info("Press the button to compare the marked lines.")
 else:
     st.markdown(st.session_state.diff_html, unsafe_allow_html=True)
+
+# --- Debug: show raw diff_data for inspection ---
+st.subheader("Debug")
+if 'last_diff_data' in st.session_state:
+    with st.expander("Show raw diff_data (debug)"):
+        try:
+            st.json(st.session_state['last_diff_data'])
+        except Exception:
+            st.write(repr(st.session_state['last_diff_data']))
+else:
+    st.info("No diff_data yet. Press 'Review my Code' to generate and inspect it.")
+
+# Show merged patch (original_patch) that will be saved to dataset
+st.subheader("Serialized Patch")
+if 'original_patch' in st.session_state:
+    with st.expander("Show merged original_patch"):
+        st.code(st.session_state['original_patch'], language='')
+else:
+    st.info("No serialized patch yet. Press 'Review my Code' to generate it.")
+
+"""
+ before_text
     
+bool TransformationAddGlobalVariable::IsApplicable(
+   if (!pointer_type) {
+     return false;
+   }
+  // ... with Private storage class.
+  if (pointer_type->storage_class() != SpvStorageClassPrivate) {
+     return false;
+   }
+  // The initializer id must be the id of a constant.  Check this with the
+  // constant manager.
+  auto constant_id = ir_context->get_constant_mgr()->GetConstantsFromIds(
+      {message_.initializer_id()});
+  if (constant_id.empty()) {
+    return false;
+  }
+  assert(constant_id.size() == 1 &&
+         "We asked for the constant associated with a single id; we should "
+         "get a single constant.");
+  // The type of the constant must match the pointee type of the pointer.
+  if (pointer_type->pointee_type() != constant_id[0]->type()) {
+    return false;
+  }  
+
+after_text
+bool TransformationAddGlobalVariable::IsApplicable(
+   if (!pointer_type) {
+     return false;
+   }
+  // ... with the right storage class.
+  if (pointer_type->storage_class() != storage_class) {
+     return false;
+   }
+  if (message_.initializer_id()) {
+    // An initializer is not allowed if the storage class is Workgroup.
+    if (storage_class == SpvStorageClassWorkgroup) {
+      return false;
+    }
+"""
