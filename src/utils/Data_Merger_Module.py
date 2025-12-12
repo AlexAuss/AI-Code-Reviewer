@@ -9,6 +9,14 @@ CODE_REF_TRAIN_PATH = "Datasets/Code_Refinement/ref-train.jsonl"
 COMMENT_GEN_TRAIN_PATH = "Datasets/Comment_Generation/msg-train.jsonl"
 COMBINED_OUTPUT_PATH = "Datasets/Unified_Dataset/train.jsonl"
 
+CODE_REF_TEST_PATH = "Datasets/Code_Refinement/ref-test.jsonl"
+COMMENT_GEN_TEST_PATH = "Datasets/Comment_Generation/msg-test.jsonl"
+COMBINED_TEST_OUTPUT_PATH = "Datasets/Unified_Dataset/test.jsonl"
+
+CODE_REF_VALID_PATH = "Datasets/Code_Refinement/ref-valid.jsonl"
+COMMENT_GEN_VALID_PATH = "Datasets/Comment_Generation/msg-valid.jsonl"
+COMBINED_VALID_OUTPUT_PATH = "Datasets/Unified_Dataset/valid.jsonl"
+
 def infer_language_from_code(code: str) -> Optional[str]:
     if not isinstance(code, str) or not code.strip():
         return None
@@ -107,6 +115,6 @@ if __name__ == "__main__":
         CODE_REF_TRAIN_PATH,
         COMMENT_GEN_TRAIN_PATH,
         COMBINED_OUTPUT_PATH,
-        CHUNK_SIZE,  # tune for memory
+        CHUNK_SIZE # tune for memory
         # max_rows=NUM_ROWS
     )
