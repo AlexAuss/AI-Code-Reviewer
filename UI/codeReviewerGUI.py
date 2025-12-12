@@ -127,6 +127,7 @@ def render_comparison_html(diff_data, before_text: str = None, after_text: str =
     """Render comparison HTML with full code diff and feedback at the end.
     
     Uses difflib opcodes to properly handle variable-length change blocks.
+    Includes main feedback based on the overall change.
     """
     if not diff_data or not before_text or not after_text:
         return "<div class='viewer'><span class='feedback'>No changes detected.</span></div>"
@@ -157,24 +158,50 @@ def render_comparison_html(diff_data, before_text: str = None, after_text: str =
             for line in after_lines[j1:j2]:
                 html.append(f"<span class='diff_add'>+{line}</span>\n")
     
-    # Add feedback section at the end (collect unique feedback)
-    if diff_data:
-        unique_feedback = []
-        seen_feedback = set()
-        for item in diff_data:
-            fb = item.get('feedback')
-            if fb and fb not in seen_feedback:
-                unique_feedback.append(fb)
-                seen_feedback.add(fb)
-        
-        if unique_feedback:
-            html.append("\n<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #30363d;'>\n")
-            for fb in unique_feedback:
-                html.append(f"<span class='feedback'>• {fb}</span><br>\n")
-            html.append("</div>\n")
+    # Generate main feedback based on the overall change
+    main_feedback = generate_main_feedback(before_text, after_text, opcodes)
+    
+    # Add feedback section at the end
+    if main_feedback:
+        html.append("\n<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #30363d;'>\n")
+        html.append(f"<span class='feedback'><strong>Feedback/Review:</strong> {main_feedback}</span><br>\n")
+        html.append("</div>\n")
+
     
     html.append("</div>")
     return ''.join(html)
+
+def generate_main_feedback(before_text: str, after_text: str, opcodes) -> str:
+    """Generate main feedback based on the entire change.
+    
+    Analyzes the type and scope of changes to provide a summary.
+    """
+    total_deleted = 0
+    total_added = 0
+    replace_count = 0
+    
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == 'delete':
+            total_deleted += i2 - i1
+        elif tag == 'insert':
+            total_added += j2 - j1
+        elif tag == 'replace':
+            total_deleted += i2 - i1
+            total_added += j2 - j1
+            replace_count += 1
+    
+    # Build summary based on change patterns
+    if total_deleted == 0 and total_added == 0:
+        return "No changes detected."
+    elif total_deleted == 0:
+        return f"Added {total_added} line(s)."
+    elif total_added == 0:
+        return f"Removed {total_deleted} line(s)."
+    elif total_deleted == total_added:
+        return f"Modified {total_deleted} line(s)."
+    else:
+        return f"Removed {total_deleted} line(s), added {total_added} line(s)."
+
 
 
 
@@ -316,101 +343,97 @@ st.title("Generative AI Code Reviewer")
 
 left, right = st.columns(2)
 with left:
-    st.subheader("Before (mark with '-')")
+    st.subheader("Before")
     before_text = st.text_area("Before", value=default_before, height=200, label_visibility="collapsed")
 with right:
-    st.subheader("After (mark with '+')")
+    st.subheader("After")
     after_text = st.text_area("After", value=default_after, height=200, label_visibility="collapsed")
 
 btn_col, _ = st.columns([1, 6])
 with btn_col:
     clicked = st.button("Review my Code", type="primary")
 
+import asyncio
+import time
+
 if "diff_html" not in st.session_state:
     st.session_state.diff_html = None
+if "review_in_progress" not in st.session_state:
+    st.session_state.review_in_progress = False
+if "review_time" not in st.session_state:
+    st.session_state.review_time = None
+if "review_result_received" not in st.session_state:
+    st.session_state.review_result_received = False
+
+async def wait_for_review_result(timeout_seconds=120):
+    """Wait asynchronously for review result or timeout.
+    
+    Currently simulates processing. Replace with actual API call when ready.
+    Args:
+        timeout_seconds: Maximum time to wait (default 2 minutes = 120 seconds)
+    
+    Returns:
+        True if result received, False if timeout
+    """
+    start_time = time.time()
+    check_interval = 0.5  # Check every 500ms
+    
+    while time.time() - start_time < timeout_seconds:
+        # TODO: Replace with actual result checking logic
+        # For now, simulate immediate completion
+        if st.session_state.get('review_result_received'):
+            return True
+        
+        await asyncio.sleep(check_interval)
+    
+    return False
 
 if clicked:
-    # Save the serialized patch into session state (no semicolon_pair tracking)
-
-    # Build comparison and feedback from current text areas
-    # You can also switch to the stored pair at any time:
-    #   before_from_pair = st.session_state["semicolon_pair"].splitlines()[0]
-    #   after_from_pair  = st.session_state["semicolon_pair"].splitlines()[1]
-    diff_data = get_comparison_results(before_text, after_text)
-    st.session_state.diff_html = render_comparison_html(diff_data, before_text=before_text, after_text=after_text)
-
-    # Store raw diff_data for debugging / inspection
-    st.session_state['last_diff_data'] = diff_data
-
-    # Serialize the marked before/after into a patch string formatted as it appears
-    # in the Comparison & Feedback display (context lines + diff markers + feedback).
-    # This is stored as `original_patch` in the dataset.
-    display_patch = format_patch_as_display(diff_data, before_text=before_text, after_text=after_text)
-    st.session_state['original_patch'] = display_patch
+    # Mark review as in progress and record the time
+    st.session_state.review_in_progress = True
+    st.session_state.review_time = time.time()
+    st.session_state.review_result_received = False
+    
+    # TODO: Make API call here to send code for review
+    # For now, just wait and don't process results until API is implemented
+    # Once API is ready, replace this section with actual async call:
+    # 
+    # async def get_review():
+    #     diff_data = await api_call(before_text, after_text)
+    #     st.session_state.diff_html = render_comparison_html(diff_data, ...)
+    #     st.session_state.review_result_received = True
+    #
+    # asyncio.run(get_review())
 
 st.subheader("Comparison & Feedback")
-if st.session_state.diff_html is None:
+
+# Check if review is in progress (show timer regardless of diff_html state)
+if st.session_state.review_in_progress and st.session_state.review_time is not None:
+    elapsed = time.time() - st.session_state.review_time
+    max_wait = 120  # 2 minutes timeout
+    
+    if not st.session_state.review_result_received and elapsed < max_wait:
+        # Still waiting for result, show progress
+        progress_value = min(elapsed / max_wait, 0.99)  # Cap at 99%
+        remaining = max_wait - elapsed
+        
+        st.progress(progress_value)
+        st.info(f"⏳ Processing your code review... {remaining:.0f}s remaining (max 2 minutes)")
+        
+        # Trigger rerun after a short delay to check for results
+        time.sleep(0.5)
+        st.rerun()
+    elif not st.session_state.review_result_received and elapsed >= max_wait:
+        # Timeout reached
+        st.session_state.review_in_progress = False
+        st.error(f"❌ Review request timed out after 2 minutes. Please try again.")
+    else:
+        # Result received, show it
+        st.session_state.review_in_progress = False
+        if st.session_state.diff_html:
+            st.markdown(st.session_state.diff_html, unsafe_allow_html=True)
+elif st.session_state.diff_html is None:
     st.info("Press the button to compare the marked lines.")
 else:
+    # Show results if available and not in progress
     st.markdown(st.session_state.diff_html, unsafe_allow_html=True)
-
-# --- Debug: show raw diff_data for inspection ---
-st.subheader("Debug")
-if 'last_diff_data' in st.session_state:
-    with st.expander("Show raw diff_data (debug)"):
-        try:
-            st.json(st.session_state['last_diff_data'])
-        except Exception:
-            st.write(repr(st.session_state['last_diff_data']))
-else:
-    st.info("No diff_data yet. Press 'Review my Code' to generate and inspect it.")
-
-# Show merged patch (original_patch) that will be saved to dataset
-st.subheader("Serialized Patch")
-if 'original_patch' in st.session_state:
-    with st.expander("Show merged original_patch"):
-        st.code(st.session_state['original_patch'], language='')
-else:
-    st.info("No serialized patch yet. Press 'Review my Code' to generate it.")
-
-"""
- before_text
-    
-bool TransformationAddGlobalVariable::IsApplicable(
-   if (!pointer_type) {
-     return false;
-   }
-  // ... with Private storage class.
-  if (pointer_type->storage_class() != SpvStorageClassPrivate) {
-     return false;
-   }
-  // The initializer id must be the id of a constant.  Check this with the
-  // constant manager.
-  auto constant_id = ir_context->get_constant_mgr()->GetConstantsFromIds(
-      {message_.initializer_id()});
-  if (constant_id.empty()) {
-    return false;
-  }
-  assert(constant_id.size() == 1 &&
-         "We asked for the constant associated with a single id; we should "
-         "get a single constant.");
-  // The type of the constant must match the pointee type of the pointer.
-  if (pointer_type->pointee_type() != constant_id[0]->type()) {
-    return false;
-  }  
-
-after_text
-bool TransformationAddGlobalVariable::IsApplicable(
-   if (!pointer_type) {
-     return false;
-   }
-  // ... with the right storage class.
-  if (pointer_type->storage_class() != storage_class) {
-     return false;
-   }
-  if (message_.initializer_id()) {
-    // An initializer is not allowed if the storage class is Workgroup.
-    if (storage_class == SpvStorageClassWorkgroup) {
-      return false;
-    }
-"""
