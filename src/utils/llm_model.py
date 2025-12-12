@@ -5,13 +5,30 @@
 import os
 import json
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+import torch
 
 # Local DeepSeek model setup
 model_name = "deepseek-ai/DeepSeek-coder-1.3b-instruct"
 print("Loading DeepSeek model... (this may take time on first run)")
+
+# Determine device
+if torch.cuda.is_available():
+    device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
+else:
+    device = "cpu"
+
+print(f"Using device: {device}")
+
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", dtype="auto")
-generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+
+if device == "mps":
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).to(device)
+else:
+    model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=torch.float16)
+
+generator = pipeline("text-generation", model=model, tokenizer=tokenizer, device=device if device != "cuda" and device != "cpu" else None)
 
 # ==============================================================
 # Part 2 – Build prompt
@@ -49,7 +66,7 @@ def build_prompt(samples, user_query, output_file="prompt_output.txt"):
 def generate_qwen_response(prompt):
     messages = [{"role": "user", "content": prompt}]
     input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    generated = generator(input_text, max_new_tokens=1000, do_sample=False)
+    generated = generator(input_text, max_new_tokens=500, do_sample=False)
     response = generated[0]['generated_text'][len(input_text):].strip()
     return response
 
