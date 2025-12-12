@@ -1,6 +1,14 @@
 import streamlit as st
+import sys
 import time
 import difflib
+from pathlib import Path
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.indexing.hybrid_retriever import HybridRetriever
 
 # Page config
 st.set_page_config(page_title="Generative AI Code Reviewer", layout="wide")
@@ -189,15 +197,58 @@ def format_patch_as_display(diff_data, before_text: str = None, after_text: str 
     return "\n".join(out)
 
 # -------------------------------------------------------------
-# MOCK API FUNCTION (UPDATED TO SIMULATE DELAY)
+# RETRIEVER INITIALIZATION (CACHED)
 # -------------------------------------------------------------
-def mock_api_call(before, after):
+@st.cache_resource
+def load_retriever():
     """
-    Simulates checking an API. 
-    We sleep for 3 seconds so you can see the spinner in the UI.
+    Load HybridRetriever with indexes. Runs once at startup and cached.
+    This loads FAISS indexes, BM25 indexes, and connects to MongoDB.
     """
-    time.sleep(3) # <--- Delay added here to simulate "working"
-    return True
+    with st.spinner("🔄 Loading retrieval system (first time only, ~30 seconds)..."):
+        retriever = HybridRetriever(
+            index_dir="data/indexes",
+            dense_weight=0.5,
+            sparse_weight=0.5,
+            similarity_threshold=0.6,  # Optimal from evaluation
+            use_ivf_index=True,
+            parallel_search=True
+        )
+        # Load all indexes and connect to MongoDB
+        retriever.load_indexes()
+        return retriever
+
+# Load retriever at startup (before UI)
+try:
+    retriever = load_retriever()
+    st.success(f"✅ Retriever ready with {retriever.dense_index.ntotal} vectors")
+except Exception as e:
+    st.error(f"❌ Failed to load retriever: {e}")
+    st.info("Make sure:\n1. Indexes exist in data/indexes/\n2. MongoDB is running: `brew services start mongodb-community`")
+    retriever = None
+
+# -------------------------------------------------------------
+# RETRIEVAL FUNCTION (REPLACES MOCK API)
+# -------------------------------------------------------------
+def perform_retrieval(patch_text: str):
+    """
+    Perform hybrid retrieval using the loaded retriever.
+    Returns retrieved examples and timing stats.
+    """
+    if retriever is None:
+        raise Exception("Retriever not loaded")
+    
+    # Retrieve similar examples (K=5, threshold=0.6)
+    retrieved_examples = retriever.retrieve(
+        patch=patch_text,
+        top_k=5,
+        apply_similarity_threshold=True
+    )
+    
+    # Get timing stats
+    timing = retriever.get_timing_stats()
+    
+    return retrieved_examples, timing
 
 # -------------------------------------------------------------
 # UI LAYOUT
@@ -221,56 +272,136 @@ if "diff_html" not in st.session_state:
     st.session_state.diff_html = None
 
 # -------------------------------------------------------------
-# MAIN LOGIC - TIMER/TIMEOUT LOOP
+# MAIN LOGIC - RETRIEVAL PIPELINE
 # -------------------------------------------------------------
 if clicked:
-    # 1. Clear previous result
-    st.session_state.diff_html = None
-    
-    # 2. Setup Timeout variables
-    start_time = time.time()
-    max_duration_seconds = 120  # 2 Minutes
-    api_success = False
-    
-    # 3. Processing Loop
-    with st.spinner("Processing Code Review..."):
-        while (time.time() - start_time) < max_duration_seconds:
-            try:
-                # Call the API (now takes 3 seconds)
-                if mock_api_call(before_text, after_text):
-                    api_success = True
-                    break # Exit loop immediately on success
-                else:
-                    time.sleep(1) # Polling delay if API returns False (in-progress)
-            except Exception as e:
-                st.error(f"API Error: {e}")
-                break
+    if retriever is None:
+        st.error("❌ Retriever not loaded. Cannot perform review.")
+    else:
+        # 1. Clear previous results
+        st.session_state.diff_html = None
+        st.session_state.retrieved_examples = None
+        st.session_state.retrieval_time = None
         
-        # 4. Handle Result
-        if not api_success:
-            st.error(f"Operation timed out after {max_duration_seconds} seconds.")
-        else:
+        # 2. Analyze code changes
+        with st.spinner("📝 Analyzing code changes..."):
             diff_data = get_comparison_results(before_text, after_text)
-            
-            # Save HTML
-            st.session_state.diff_html = render_comparison_html(
+            patch_text = format_patch_as_display(
                 diff_data, 
                 before_text=before_text, 
                 after_text=after_text
             )
+        
+        if not patch_text.strip():
+            st.warning("⚠️ No changes detected between Before and After code.")
+        else:
+            # 3. Retrieve similar examples
+            with st.spinner("🔍 Retrieving similar code reviews (~2 seconds)..."):
+                try:
+                    retrieved_examples, timing = perform_retrieval(patch_text)
+                    
+                    # Save results to session state
+                    st.session_state['retrieved_examples'] = retrieved_examples
+                    st.session_state['retrieval_time'] = timing.total_retrieval_ms / 1000
+                    st.session_state['original_patch'] = patch_text
+                    st.session_state['last_diff_data'] = diff_data
+                    
+                    # Generate comparison HTML
+                    st.session_state.diff_html = render_comparison_html(
+                        diff_data, 
+                        before_text=before_text, 
+                        after_text=after_text
+                    )
+                    
+                    st.success(f"✅ Retrieved {len(retrieved_examples)} relevant examples in {timing.total_retrieval_ms/1000:.2f}s")
+                    
+                except Exception as e:
+                    st.error(f"❌ Retrieval error: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
             
-            # Save Debug/Patch data
-            st.session_state['last_diff_data'] = diff_data
-            st.session_state['original_patch'] = format_patch_as_display(
-                diff_data, 
-                before_text=before_text, 
-                after_text=after_text
-            )
+            # TODO: Step 4 - LLM Generation (Your teammate will implement)
+            # Once LLM is ready, add this:
+            # 
+            # with st.spinner("🤖 Generating AI review (~3-5 seconds)..."):
+            #     formatted_examples = retriever.format_for_llm_prompt(retrieved_examples)
+            #     llm_review = generate_review_with_llm(patch_text, formatted_examples)
+            #     st.session_state.llm_review = llm_review
 
 st.subheader("Comparison & Feedback")
 
 if st.session_state.diff_html is None:
-    if not clicked:
-        st.info("Press the button to compare the marked lines.")
+    st.info("👆 Press the 'Review my Code' button above to start the review process.")
 else:
+    # Show code comparison
+    st.markdown("### 📋 Code Changes")
     st.markdown(st.session_state.diff_html, unsafe_allow_html=True)
+    
+    # Show retrieved examples
+    if st.session_state.get('retrieved_examples'):
+        st.markdown("---")
+        st.markdown("### 📚 Similar Code Reviews from Training Data")
+        
+        examples = st.session_state['retrieved_examples']
+        timing = st.session_state.get('retrieval_time', 0)
+        st.caption(f"Found {len(examples)} relevant examples in {timing:.2f}s (K=5, threshold=0.6)")
+        
+        for i, example in enumerate(examples, 1):
+            # Prepare display info
+            lang = example.get('language', 'unknown')
+            score = example.get('retrieval_score', 0)
+            semantic_sim = example.get('semantic_similarity', 0)
+            
+            with st.expander(f"📝 Example {i} - {lang} (Retrieval Score: {score:.3f}, Similarity: {semantic_sim:.3f})", expanded=(i == 1)):
+                # Similarity score
+                if semantic_sim > 0:
+                    st.caption(f"🎯 Semantic Similarity: {semantic_sim:.3f}")
+                
+                # Original patch
+                st.markdown("**Original Patch:**")
+                patch_code = example.get('original_patch') or example.get('patch', 'N/A')
+                display_patch = patch_code[:800] + ('...' if len(patch_code) > 800 else '')
+                st.code(display_patch, language='diff')
+                
+                # Review comment
+                st.markdown("**Review Comment:**")
+                review = example.get('review_comment', 'N/A')
+                display_review = review[:800] + ('...' if len(review) > 800 else '')
+                st.info(display_review)
+                
+                # Refined patch if available
+                if example.get('refined_patch'):
+                    st.markdown("**Refined/Fixed Code:**")
+                    refined = example['refined_patch']
+                    display_refined = refined[:800] + ('...' if len(refined) > 800 else '')
+                    st.code(display_refined, language='diff')
+                
+                # Metadata
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.caption(f"📦 Source: {example.get('source_dataset', 'N/A')}")
+                with col2:
+                    st.caption(f"💻 Language: {lang}")
+                with col3:
+                    quality = example.get('quality_label', 'N/A')
+                    st.caption(f"⭐ Quality: {quality}")
+        
+        # TODO: Show LLM-generated review (Your teammate will implement)
+        st.markdown("---")
+        st.markdown("### 🤖 AI-Generated Review")
+        st.info("""
+        **TODO: LLM Integration Pending**
+        
+        Once your teammate implements LLM integration, the AI-generated review will appear here.
+        It will synthesize insights from the retrieved examples above.
+        
+        Implementation needed:
+        1. Format examples using `retriever.format_for_llm_prompt(retrieved_examples)`
+        2. Call LLM with formatted prompt + user's patch
+        3. Display generated review here
+        """)
+        
+        # Optional: Show performance stats
+        with st.expander("🔧 Show Retrieval Performance Stats"):
+            timing_obj = retriever.get_timing_stats()
+            st.json(timing_obj.to_dict())
