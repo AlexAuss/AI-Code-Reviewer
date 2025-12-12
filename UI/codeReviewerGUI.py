@@ -1,11 +1,13 @@
 import streamlit as st
+import time
+import difflib
 
 # Page config
 st.set_page_config(page_title="Generative AI Code Reviewer", layout="wide")
 
 # Styles
 st.markdown(
-        """
+    """
 <style>
 .viewer {
     font-family: Consolas, monospace;
@@ -23,7 +25,6 @@ st.markdown(
 .diff_add { color: #22863a; }
 .diff_del { color: #cb2431; }
 .feedback { color: #6a737d; font-style: italic; }
-.fix_semicolon { background-color: #e6ffed; font-weight: bold; padding: 0 2px; }
 .context { color: #9fb1c0; font-family: Consolas, monospace; }
 textarea, .stTextArea textarea {
     font-family: Consolas, monospace !important;
@@ -32,10 +33,10 @@ textarea, .stTextArea textarea {
 }
 </style>
 """,
-        unsafe_allow_html=True,
+    unsafe_allow_html=True,
 )
 
-# Default example: users can paste their own code or edit this example
+# Default example
 default_before = """bool TransformationAddGlobalVariable::IsApplicable(
    if (!pointer_type) {
      return false;
@@ -44,7 +45,7 @@ default_before = """bool TransformationAddGlobalVariable::IsApplicable(
   if (pointer_type->storage_class() != SpvStorageClassPrivate) {
      return false;
    }
-  // The initializer id must be the id of a constant.  Check this with the
+  // The initializer id must be the id of a constant. Check this with the
   // constant manager.
   auto constant_id = ir_context->get_constant_mgr()->GetConstantsFromIds(
       {message_.initializer_id()});
@@ -76,110 +77,37 @@ default_after = """bool TransformationAddGlobalVariable::IsApplicable(
 """
 
 
-# Diff-based line comparison
+# -------------------------------------------------------------
+# HELPER FUNCTIONS (Diffing & HTML Generation)
+# -------------------------------------------------------------
 def get_diff_operations(before_src: str, after_src: str):
-    """Get diff operations (insert, delete, replace, equal) with proper handling.
-    
-    Returns list of tuples: (tag, i1, i2, j1, j2)
-    - tag: 'replace', 'delete', 'insert', or 'equal'
-    - i1, i2: range in before text
-    - j1, j2: range in after text
-    """
-    import difflib
-    
     before_lines = before_src.splitlines()
     after_lines = after_src.splitlines()
-    
     matcher = difflib.SequenceMatcher(None, before_lines, after_lines)
     return matcher.get_opcodes()
 
 def get_comparison_results(before_src: str, after_src: str):
-    """Compare before and after code, automatically detecting changed lines using opcodes."""
     before_lines = before_src.splitlines()
     after_lines = after_src.splitlines()
     opcodes = get_diff_operations(before_src, after_src)
-    
     results = []
-    
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == 'delete':
-            # Deleted lines
             for line in before_lines[i1:i2]:
-                entry = {"old": line, "new": None, "type": "javascript", "feedback": "Removed line."}
-                results.append(entry)
+                results.append({"old": line, "new": None, "type": "javascript", "feedback": "Removed line."})
         elif tag == 'insert':
-            # Inserted lines
             for line in after_lines[j1:j2]:
-                entry = {"old": None, "new": line, "type": "javascript", "feedback": "Added line."}
-                results.append(entry)
+                results.append({"old": None, "new": line, "type": "javascript", "feedback": "Added line."})
         elif tag == 'replace':
-            # Replaced lines - show deletions first, then additions
             for line in before_lines[i1:i2]:
-                entry = {"old": line, "new": None, "type": "javascript", "feedback": "Removed line."}
-                results.append(entry)
+                results.append({"old": line, "new": None, "type": "javascript", "feedback": "Removed line."})
             for line in after_lines[j1:j2]:
-                entry = {"old": None, "new": line, "type": "javascript", "feedback": "Added line."}
-                results.append(entry)
-    
+                results.append({"old": None, "new": line, "type": "javascript", "feedback": "Added line."})
     return results
 
-def render_comparison_html(diff_data, before_text: str = None, after_text: str = None):
-    """Render comparison HTML with full code diff and feedback at the end.
-    
-    Uses difflib opcodes to properly handle variable-length change blocks.
-    Includes main feedback based on the overall change.
-    """
-    if not diff_data or not before_text or not after_text:
-        return "<div class='viewer'><span class='feedback'>No changes detected.</span></div>"
-
-    before_lines = before_text.splitlines()
-    after_lines = after_text.splitlines()
-    opcodes = get_diff_operations(before_text, after_text)
-    
-    html = ["<div class='viewer'>"]
-    
-    for tag, i1, i2, j1, j2 in opcodes:
-        if tag == 'equal':
-            # Context lines - show all unchanged lines
-            for line in before_lines[i1:i2]:
-                html.append(f" {line}\n")
-        elif tag == 'delete':
-            # Deletions - show all deleted lines
-            for line in before_lines[i1:i2]:
-                html.append(f"<span class='diff_del'>-{line}</span>\n")
-        elif tag == 'insert':
-            # Insertions - show all added lines
-            for line in after_lines[j1:j2]:
-                html.append(f"<span class='diff_add'>+{line}</span>\n")
-        elif tag == 'replace':
-            # Replacements - show all deletions first, then all additions
-            for line in before_lines[i1:i2]:
-                html.append(f"<span class='diff_del'>-{line}</span>\n")
-            for line in after_lines[j1:j2]:
-                html.append(f"<span class='diff_add'>+{line}</span>\n")
-    
-    # Generate main feedback based on the overall change
-    main_feedback = generate_main_feedback(before_text, after_text, opcodes)
-    
-    # Add feedback section at the end
-    if main_feedback:
-        html.append("\n<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #30363d;'>\n")
-        html.append(f"<span class='feedback'><strong>Feedback/Review:</strong> {main_feedback}</span><br>\n")
-        html.append("</div>\n")
-
-    
-    html.append("</div>")
-    return ''.join(html)
-
 def generate_main_feedback(before_text: str, after_text: str, opcodes) -> str:
-    """Generate main feedback based on the entire change.
-    
-    Analyzes the type and scope of changes to provide a summary.
-    """
     total_deleted = 0
     total_added = 0
-    replace_count = 0
-    
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == 'delete':
             total_deleted += i2 - i1
@@ -188,9 +116,7 @@ def generate_main_feedback(before_text: str, after_text: str, opcodes) -> str:
         elif tag == 'replace':
             total_deleted += i2 - i1
             total_added += j2 - j1
-            replace_count += 1
-    
-    # Build summary based on change patterns
+            
     if total_deleted == 0 and total_added == 0:
         return "No changes detected."
     elif total_deleted == 0:
@@ -202,142 +128,80 @@ def generate_main_feedback(before_text: str, after_text: str, opcodes) -> str:
     else:
         return f"Removed {total_deleted} line(s), added {total_added} line(s)."
 
-
-
-
-
-
-
-def serialize_diff_to_patch(diff_data) -> str:
-    """Serialize the marked comparison results into a patch-like string.
-
-    Produces lines starting with '-' for removed/old lines and '+' for
-    added/new lines. This format is suitable to store as the
-    `original_patch` field in the dataset JSONL records.
-    """
-    if not diff_data:
-        return ""
-    lines = []
-    for item in diff_data:
-        old = item.get("old")
-        new = item.get("new")
-        if old is not None:
-            lines.append(f"-{old}")
-        if new is not None:
-            lines.append(f"+{new}")
-    return "\n".join(lines)
-
-
-def build_patch_from_texts(before_text: str, after_text: str, context_lines: int = 3) -> str:
-    """Build a patch from before/after textareas with surrounding context.
-
-    Strategy:
-    1. Extract marked lines (- and +) from before/after.
-    2. For each marked line, include K surrounding context lines.
-    3. Output the hunks in order with minimal duplication.
-    """
-    b_lines = before_text.splitlines()
-    a_lines = after_text.splitlines()
-
-    # Find all marked line indices
-    b_marked_indices = set()
-    a_marked_indices = set()
-    
-    for idx, line in enumerate(b_lines):
-        if line.lstrip().startswith('-'):
-            b_marked_indices.add(idx)
-    
-    for idx, line in enumerate(a_lines):
-        if line.lstrip().startswith('+'):
-            a_marked_indices.add(idx)
-
-    if not b_marked_indices and not a_marked_indices:
-        # No marked lines; return empty or full text (choose based on preference)
-        return ""
-
-    # Collect all line indices to include (marked + context)
-    included_b = set()
-    included_a = set()
-
-    # For each marked line in before, include it plus context
-    for idx in b_marked_indices:
-        for j in range(max(0, idx - context_lines), min(len(b_lines), idx + context_lines + 1)):
-            included_b.add(j)
-
-    # For each marked line in after, include it plus context
-    for idx in a_marked_indices:
-        for j in range(max(0, idx - context_lines), min(len(a_lines), idx + context_lines + 1)):
-            included_a.add(j)
-
-    out = []
-    last_output_idx = -10  # Track last output index to avoid duplication
-
-    # Iterate through before text and output included lines
-    for idx in sorted(included_b):
-        line = b_lines[idx]
-        s = line.lstrip()
-        
-        if s.startswith('-'):
-            # Marked removal line
-            content = s[1:].lstrip() if s[1:].startswith(' ') else s[1:]
-            out.append('-' + content)
-        else:
-            # Context line from before
-            out.append(line)
-        
-        last_output_idx = idx
-
-    # Iterate through after text and output marked added lines (with minimal context duplication)
-    for idx in sorted(included_a):
-        line = a_lines[idx]
-        s = line.lstrip()
-        
-        if s.startswith('+'):
-            # Marked addition line
-            content = s[1:].lstrip() if s[1:].startswith(' ') else s[1:]
-            out.append('+' + content)
-
-    return "\n".join(out)
-
-
-def format_patch_as_display(diff_data, before_text: str = None, after_text: str = None) -> str:
-    """Format the patch as a unified diff showing all lines with proper alignment.
-    
-    Uses difflib opcodes to properly handle variable-length change blocks.
-    Groups consecutive deletions before additions in replace blocks.
-    """
+def render_comparison_html(diff_data, before_text: str = None, after_text: str = None):
     if not diff_data or not before_text or not after_text:
-        return ""
+        return "<div class='viewer'><span class='feedback'>No changes detected.</span></div>"
 
     before_lines = before_text.splitlines()
     after_lines = after_text.splitlines()
     opcodes = get_diff_operations(before_text, after_text)
     
-    out = []
+    html = ["<div class='viewer'>"]
     
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == 'equal':
-            # Context lines - show all unchanged lines
+            for line in before_lines[i1:i2]:
+                html.append(f" {line}\n")
+        elif tag == 'delete':
+            for line in before_lines[i1:i2]:
+                html.append(f"<span class='diff_del'>-{line}</span>\n")
+        elif tag == 'insert':
+            for line in after_lines[j1:j2]:
+                html.append(f"<span class='diff_add'>+{line}</span>\n")
+        elif tag == 'replace':
+            for line in before_lines[i1:i2]:
+                html.append(f"<span class='diff_del'>-{line}</span>\n")
+            for line in after_lines[j1:j2]:
+                html.append(f"<span class='diff_add'>+{line}</span>\n")
+    
+    main_feedback = generate_main_feedback(before_text, after_text, opcodes)
+    
+    if main_feedback:
+        html.append("\n<div style='margin-top: 12px; padding-top: 12px; border-top: 1px solid #30363d;'>\n")
+        html.append(f"<span class='feedback'><strong>Feedback/Review:</strong> {main_feedback}</span><br>\n")
+        html.append("</div>\n")
+
+    html.append("</div>")
+    return ''.join(html)
+
+def format_patch_as_display(diff_data, before_text: str = None, after_text: str = None) -> str:
+    if not diff_data or not before_text or not after_text:
+        return ""
+    before_lines = before_text.splitlines()
+    after_lines = after_text.splitlines()
+    opcodes = get_diff_operations(before_text, after_text)
+    out = []
+    for tag, i1, i2, j1, j2 in opcodes:
+        if tag == 'equal':
             for line in before_lines[i1:i2]:
                 out.append(f" {line}")
         elif tag == 'delete':
-            # Deletions - show all deleted lines
             for line in before_lines[i1:i2]:
                 out.append(f"-{line}")
         elif tag == 'insert':
-            # Insertions - show all added lines
             for line in after_lines[j1:j2]:
                 out.append(f"+{line}")
         elif tag == 'replace':
-            # Replacements - show all deletions first, then all additions
             for line in before_lines[i1:i2]:
                 out.append(f"-{line}")
             for line in after_lines[j1:j2]:
                 out.append(f"+{line}")
-    
     return "\n".join(out)
 
-# No dropdown: users can paste multiple marked blocks directly into the textareas.
+# -------------------------------------------------------------
+# MOCK API FUNCTION (UPDATED TO SIMULATE DELAY)
+# -------------------------------------------------------------
+def mock_api_call(before, after):
+    """
+    Simulates checking an API. 
+    We sleep for 3 seconds so you can see the spinner in the UI.
+    """
+    time.sleep(3) # <--- Delay added here to simulate "working"
+    return True
+
+# -------------------------------------------------------------
+# UI LAYOUT
+# -------------------------------------------------------------
 
 st.title("Generative AI Code Reviewer")
 
@@ -353,87 +217,60 @@ btn_col, _ = st.columns([1, 6])
 with btn_col:
     clicked = st.button("Review my Code", type="primary")
 
-import asyncio
-import time
-
 if "diff_html" not in st.session_state:
     st.session_state.diff_html = None
-if "review_in_progress" not in st.session_state:
-    st.session_state.review_in_progress = False
-if "review_time" not in st.session_state:
-    st.session_state.review_time = None
-if "review_result_received" not in st.session_state:
-    st.session_state.review_result_received = False
 
-async def wait_for_review_result(timeout_seconds=120):
-    """Wait asynchronously for review result or timeout.
-    
-    Currently simulates processing. Replace with actual API call when ready.
-    Args:
-        timeout_seconds: Maximum time to wait (default 2 minutes = 120 seconds)
-    
-    Returns:
-        True if result received, False if timeout
-    """
-    start_time = time.time()
-    check_interval = 0.5  # Check every 500ms
-    
-    while time.time() - start_time < timeout_seconds:
-        # TODO: Replace with actual result checking logic
-        # For now, simulate immediate completion
-        if st.session_state.get('review_result_received'):
-            return True
-        
-        await asyncio.sleep(check_interval)
-    
-    return False
-
+# -------------------------------------------------------------
+# MAIN LOGIC - TIMER/TIMEOUT LOOP
+# -------------------------------------------------------------
 if clicked:
-    # Mark review as in progress and record the time
-    st.session_state.review_in_progress = True
-    st.session_state.review_time = time.time()
-    st.session_state.review_result_received = False
+    # 1. Clear previous result
+    st.session_state.diff_html = None
     
-    # TODO: Make API call here to send code for review
-    # For now, just wait and don't process results until API is implemented
-    # Once API is ready, replace this section with actual async call:
-    # 
-    # async def get_review():
-    #     diff_data = await api_call(before_text, after_text)
-    #     st.session_state.diff_html = render_comparison_html(diff_data, ...)
-    #     st.session_state.review_result_received = True
-    #
-    # asyncio.run(get_review())
+    # 2. Setup Timeout variables
+    start_time = time.time()
+    max_duration_seconds = 120  # 2 Minutes
+    api_success = False
+    
+    # 3. Processing Loop
+    with st.spinner("Processing Code Review..."):
+        while (time.time() - start_time) < max_duration_seconds:
+            try:
+                # Call the API (now takes 3 seconds)
+                if mock_api_call(before_text, after_text):
+                    api_success = True
+                    break # Exit loop immediately on success
+                else:
+                    time.sleep(1) # Polling delay if API returns False (in-progress)
+            except Exception as e:
+                st.error(f"API Error: {e}")
+                break
+        
+        # 4. Handle Result
+        if not api_success:
+            st.error(f"Operation timed out after {max_duration_seconds} seconds.")
+        else:
+            diff_data = get_comparison_results(before_text, after_text)
+            
+            # Save HTML
+            st.session_state.diff_html = render_comparison_html(
+                diff_data, 
+                before_text=before_text, 
+                after_text=after_text
+            )
+            
+            # Save Debug/Patch data
+            st.session_state['last_diff_data'] = diff_data
+            st.session_state['original_patch'] = format_patch_as_display(
+                diff_data, 
+                before_text=before_text, 
+                after_text=after_text
+            )
 
 st.subheader("Comparison & Feedback")
 
-# Check if review is in progress (show timer regardless of diff_html state)
-if st.session_state.review_in_progress and st.session_state.review_time is not None:
-    elapsed = time.time() - st.session_state.review_time
-    max_wait = 120  # 2 minutes timeout
-    
-    if not st.session_state.review_result_received and elapsed < max_wait:
-        # Still waiting for result, show progress
-        progress_value = min(elapsed / max_wait, 0.99)  # Cap at 99%
-        remaining = max_wait - elapsed
-        
-        st.progress(progress_value)
-        st.info(f"⏳ Processing your code review... {remaining:.0f}s remaining (max 2 minutes)")
-        
-        # Trigger rerun after a short delay to check for results
-        time.sleep(0.5)
-        st.rerun()
-    elif not st.session_state.review_result_received and elapsed >= max_wait:
-        # Timeout reached
-        st.session_state.review_in_progress = False
-        st.error(f"❌ Review request timed out after 2 minutes. Please try again.")
-    else:
-        # Result received, show it
-        st.session_state.review_in_progress = False
-        if st.session_state.diff_html:
-            st.markdown(st.session_state.diff_html, unsafe_allow_html=True)
-elif st.session_state.diff_html is None:
-    st.info("Press the button to compare the marked lines.")
+if st.session_state.diff_html is None:
+    if not clicked:
+        st.info("Press the button to compare the marked lines.")
 else:
-    # Show results if available and not in progress
     st.markdown(st.session_state.diff_html, unsafe_allow_html=True)
