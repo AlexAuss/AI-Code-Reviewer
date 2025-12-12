@@ -3,21 +3,25 @@ Deepseek 1.3B:
 Samples processed: 67
 Average ROUGE-L F1 Score: 0.0656
 Average CodeBLEU: 0.2296
+6.6 seconds per sample
 
 Qwen 0.6B:
 
 Samples processed: 67
 Average ROUGE-L F1 Score: 0.0909
 Average CodeBLEU: 0.3000
+2.6 seconds per sample
 
 Qwen 1.5B:
 
 Samples processed: 67
 Average ROUGE-L F1 Score: 0.0911
 Average CodeBLEU: 0.3260
+3.4 seconds per sample
 
 Qwen 3B:
 
 Samples processed: 67
 Average ROUGE-L F1 Score: 0.0964
 Average CodeBLEU: 0.3335
+29 seconds per sample
