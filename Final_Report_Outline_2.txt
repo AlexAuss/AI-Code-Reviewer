@@ -42,7 +42,7 @@ final, complete results.
 For the results see the file "running_averages.txt". 
 
 For the final results 
-• Quantitative results: e.g., evaluations - get the results from above file
+• Quantitative results: e.g., evaluations - get the results from above file, say about the challenges we faced solving the CodeBleu and Tree-sitter framework version compatibility issues and how we solved it. 
 • Qualitative examples: e.g., model outputs, comparisons, and error cases - we will provide a sample images showing our model input output.
 
 • Comparisons: e.g., baselines, alternative prompts, RAG variants, 
